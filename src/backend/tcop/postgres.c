@@ -51,11 +51,13 @@
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
 #include "parser/parser.h"
+#include "parser/parsereng.h"
 #include "pg_getopt.h"
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/protocol_routine.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
 #include "replication/slot.h"
@@ -172,7 +174,14 @@ static StringInfoData row_description_buf;
  */
 static int	InteractiveBackend(StringInfo inBuf);
 static int	interactive_getc(void);
-static int	ReadCommand(StringInfo inBuf);
+static int	standard_ReadCommand(StringInfo inBuf);
+static int	ProtocolReadCommand(StringInfo inBuf);
+static ProtocolCommandResult ProtocolProcessCommand(int *command,
+														StringInfo inBuf);
+static void ProtocolCommReset(void);
+static bool ProtocolIsReadingMessage(void);
+static void ProtocolSessionInitialize(Port *port);
+static void ProtocolSendBackendKeyData(int pid, const uint8 *key, int keylen);
 static void forbidden_in_wal_sender(char firstchar);
 static int	errdetail_execute(List *raw_parsetree_list);
 static int	errdetail_params(ParamListInfo params);
@@ -479,7 +488,7 @@ SocketBackendReadCommand(StringInfo inBuf)
  * ----------------
  */
 static int
-ReadCommand(StringInfo inBuf)
+standard_ReadCommand(StringInfo inBuf)
 {
 	int			result;
 
@@ -491,6 +500,150 @@ ReadCommand(StringInfo inBuf)
 	else
 		result = InteractiveBackend(inBuf);
 	return result;
+}
+
+/*
+ * Standard fallback wrappers.  A compatibility protocol owns only its wire
+ * framing and packet encoding; PostgresMain retains the PG18 SQL and
+ * transaction loop.
+ */
+static int
+ProtocolReadCommand(StringInfo inBuf)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->read_command == NULL)
+			ereport(FATAL,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no command reader",
+							routine->name)));
+
+		return routine->read_command(inBuf);
+	}
+
+	return standard_ReadCommand(inBuf);
+}
+
+static ProtocolCommandResult
+ProtocolProcessCommand(int *command, StringInfo inBuf)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+	ProtocolCommandResult result;
+
+	if (routine == NULL || routine->kind == COMPAT_PROTOCOL_POSTGRES)
+		return PROTOCOL_COMMAND_PASSTHROUGH;
+
+	if (routine->process_command == NULL)
+		ereport(FATAL,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("protocol \"%s\" has no command processor",
+						routine->name)));
+
+	result = routine->process_command(command, inBuf);
+	if (result != PROTOCOL_COMMAND_PASSTHROUGH &&
+		result != PROTOCOL_COMMAND_HANDLED)
+		ereport(FATAL,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("protocol \"%s\" returned an invalid command result",
+						routine->name)));
+
+	return result;
+}
+
+static void
+standard_CommReset(void)
+{
+	pq_comm_reset();
+}
+
+static void
+ProtocolCommReset(void)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->comm_reset == NULL)
+			ereport(FATAL,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no error-recovery reset",
+							routine->name)));
+
+		routine->comm_reset();
+		return;
+	}
+
+	standard_CommReset();
+}
+
+static bool
+standard_IsReadingMessage(void)
+{
+	return pq_is_reading_msg();
+}
+
+static bool
+ProtocolIsReadingMessage(void)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->is_reading_msg == NULL)
+			ereport(FATAL,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no message-boundary check",
+							routine->name)));
+
+		return routine->is_reading_msg();
+	}
+
+	return standard_IsReadingMessage();
+}
+
+static void
+ProtocolSessionInitialize(Port *port)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->session_initialize == NULL)
+			ereport(FATAL,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no session initializer",
+							routine->name)));
+
+		routine->session_initialize(port);
+	}
+}
+
+static void
+standard_SendBackendKeyData(int pid, const uint8 *key, int keylen)
+{
+	StringInfoData buf;
+
+	pq_beginmessage(&buf, PqMsg_BackendKeyData);
+	pq_sendint32(&buf, pid);
+	pq_sendbytes(&buf, key, keylen);
+	pq_endmessage(&buf);
+}
+
+static void
+ProtocolSendBackendKeyData(int pid, const uint8 *key, int keylen)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->send_backend_key_data != NULL)
+			routine->send_backend_key_data(pid, key, keylen);
+		return;
+	}
+
+	standard_SendBackendKeyData(pid, key, keylen);
 }
 
 /*
@@ -607,6 +760,13 @@ ProcessClientWriteInterrupt(bool blocked)
 List *
 pg_parse_query(const char *query_string)
 {
+	return pg_parse_query_with_routine(query_string, GetStandardParserRoutine());
+}
+
+List *
+pg_parse_query_with_routine(const char *query_string,
+						const ParserRoutine *parser_routine)
+{
 	List	   *raw_parsetree_list;
 
 	TRACE_POSTGRESQL_QUERY_PARSE_START(query_string);
@@ -614,7 +774,10 @@ pg_parse_query(const char *query_string)
 	if (log_parser_stats)
 		ResetUsage();
 
-	raw_parsetree_list = raw_parser(query_string, RAW_PARSE_DEFAULT);
+	Assert(parser_routine != NULL);
+	Assert(parser_routine->raw_parse != NULL);
+	raw_parsetree_list = parser_routine->raw_parse(query_string,
+													 RAW_PARSE_DEFAULT);
 
 	if (log_parser_stats)
 		ShowUsage("PARSER STATISTICS");
@@ -671,7 +834,20 @@ pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 								   const char *query_string,
 								   const Oid *paramTypes,
 								   int numParams,
-								   QueryEnvironment *queryEnv)
+												QueryEnvironment *queryEnv)
+{
+	return pg_analyze_and_rewrite_fixedparams_with_routine(parsetree,
+																   query_string, paramTypes, numParams,
+																   queryEnv, GetStandardParserRoutine());
+}
+
+List *
+pg_analyze_and_rewrite_fixedparams_with_routine(RawStmt *parsetree,
+															 const char *query_string,
+															 const Oid *paramTypes,
+															 int numParams,
+															 QueryEnvironment *queryEnv,
+															 const ParserRoutine *parser_routine)
 {
 	Query	   *query;
 	List	   *querytree_list;
@@ -684,8 +860,9 @@ pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 	if (log_parser_stats)
 		ResetUsage();
 
-	query = parse_analyze_fixedparams(parsetree, query_string, paramTypes, numParams,
-									  queryEnv);
+	query = parse_analyze_fixedparams_with_routine(parsetree, query_string,
+																	paramTypes, numParams, queryEnv,
+																	parser_routine);
 
 	if (log_parser_stats)
 		ShowUsage("PARSE ANALYSIS STATISTICS");
@@ -707,10 +884,28 @@ pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
  */
 List *
 pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
-								 const char *query_string,
-								 Oid **paramTypes,
-								 int *numParams,
-								 QueryEnvironment *queryEnv)
+									 const char *query_string,
+									 Oid **paramTypes,
+									 int *numParams,
+									 QueryEnvironment *queryEnv)
+{
+	return pg_analyze_and_rewrite_varparams_with_routine(parsetree,
+																 query_string, paramTypes, numParams,
+																 queryEnv, GetStandardParserRoutine());
+}
+
+/*
+ * Keep variable parameter analysis in the dialect that produced the raw
+ * statement.  This is the varparams counterpart of the existing fixedparams
+ * routine and is required by protocol-level prepared statements.
+ */
+List *
+pg_analyze_and_rewrite_varparams_with_routine(RawStmt *parsetree,
+															const char *query_string,
+															Oid **paramTypes,
+															int *numParams,
+															QueryEnvironment *queryEnv,
+															const ParserRoutine *parser_routine)
 {
 	Query	   *query;
 	List	   *querytree_list;
@@ -723,8 +918,9 @@ pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
 	if (log_parser_stats)
 		ResetUsage();
 
-	query = parse_analyze_varparams(parsetree, query_string, paramTypes, numParams,
-									queryEnv);
+	query = parse_analyze_varparams_with_routine(parsetree, query_string,
+															 paramTypes, numParams, queryEnv,
+															 parser_routine);
 
 	/*
 	 * Check all parameter types got determined.
@@ -1013,7 +1209,7 @@ pg_plan_queries(List *querytrees, const char *query_string, int cursorOptions,
  * Execute a "simple Query" protocol message.
  */
 static void
-exec_simple_query(const char *query_string)
+exec_simple_query(const char *query_string, const ParserRoutine *parser_routine)
 {
 	CommandDest dest = whereToSendOutput;
 	MemoryContext oldcontext;
@@ -1022,6 +1218,8 @@ exec_simple_query(const char *query_string)
 	bool		save_log_statement_stats = log_statement_stats;
 	bool		was_logged = false;
 	bool		use_implicit_block;
+	bool		simple_query_statement_ends_xact = false;
+	const ProtocolRoutine *protocol_routine;
 	char		msec_str[32];
 
 	/*
@@ -1066,7 +1264,19 @@ exec_simple_query(const char *query_string)
 	 * Do basic parsing of the query or queries (this should be safe even if
 	 * we are in aborted transaction state!)
 	 */
-	parsetree_list = pg_parse_query(query_string);
+	parsetree_list = pg_parse_query_with_routine(query_string, parser_routine);
+	protocol_routine = GetCurrentProtocolRoutine();
+	if (list_length(parsetree_list) > 1 &&
+		protocol_routine != NULL &&
+		protocol_routine->allow_multi_statements != NULL &&
+		!protocol_routine->allow_multi_statements())
+		ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("multiple statements are disabled for this connection")));
+	if (protocol_routine != NULL &&
+		protocol_routine->simple_query_statement_ends_xact != NULL)
+		simple_query_statement_ends_xact =
+			protocol_routine->simple_query_statement_ends_xact();
 
 	/* Log immediately if dictated by log_statement */
 	if (check_log_statement(parsetree_list))
@@ -1091,7 +1301,8 @@ exec_simple_query(const char *query_string)
 	 * behavior properly in the transaction machinery, we use an "implicit"
 	 * transaction block.
 	 */
-	use_implicit_block = (list_length(parsetree_list) > 1);
+	use_implicit_block = (list_length(parsetree_list) > 1 &&
+					  !simple_query_statement_ends_xact);
 
 	/*
 	 * Run through the raw parsetree(s) and process each one.
@@ -1110,6 +1321,11 @@ exec_simple_query(const char *query_string)
 		int16		format;
 		const char *cmdtagname;
 		size_t		cmdtaglen;
+		bool		has_more = lnext(parsetree_list, parsetree_item) != NULL;
+
+		if (protocol_routine != NULL &&
+			protocol_routine->set_simple_query_more_results != NULL)
+			protocol_routine->set_simple_query_more_results(has_more);
 
 		pgstat_report_query_id(0, true);
 		pgstat_report_plan_id(0, true);
@@ -1145,6 +1361,16 @@ exec_simple_query(const char *query_string)
 
 		/* Make sure we are in a transaction command */
 		start_xact_command();
+
+		/*
+		 * Let non-PostgreSQL protocols establish statement-specific session
+		 * transaction state after the command is active, but before planning
+		 * can acquire a snapshot.  MySQL uses this for autocommit=0's lazy
+		 * transaction start and for BEGIN's implicit-commit boundary.
+		 */
+		if (protocol_routine != NULL &&
+			protocol_routine->before_simple_query_statement != NULL)
+			protocol_routine->before_simple_query_statement(parsetree->stmt);
 
 		/*
 		 * If using an implicit transaction block, and we're not already in a
@@ -1191,8 +1417,8 @@ exec_simple_query(const char *query_string)
 		else
 			oldcontext = MemoryContextSwitchTo(MessageContext);
 
-		querytree_list = pg_analyze_and_rewrite_fixedparams(parsetree, query_string,
-															NULL, 0, NULL);
+		querytree_list = pg_analyze_and_rewrite_fixedparams_with_routine(
+			parsetree, query_string, NULL, 0, NULL, parser_routine);
 
 		plantree_list = pg_plan_queries(querytree_list, query_string,
 										CURSOR_OPT_PARALLEL_OK, NULL);
@@ -1265,7 +1491,7 @@ exec_simple_query(const char *query_string)
 		 */
 		receiver = CreateDestReceiver(dest);
 		if (dest == DestRemote)
-			SetRemoteDestReceiverParams(receiver, portal);
+			ProtocolSetRemoteDestReceiverParams(receiver, portal);
 
 		/*
 		 * Switch back to transaction context for execution.
@@ -1286,7 +1512,7 @@ exec_simple_query(const char *query_string)
 
 		PortalDrop(portal, false);
 
-		if (lnext(parsetree_list, parsetree_item) == NULL)
+		if (!has_more)
 		{
 			/*
 			 * If this is the last parsetree of the query string, close down
@@ -1297,16 +1523,27 @@ exec_simple_query(const char *query_string)
 			 * error, not one and then the other.  Also, if we're using an
 			 * implicit transaction block, we must close that out first.
 			 */
+			/*
+			 * Let protocols capture session-local state (e.g. LAST_INSERT_ID)
+			 * before the transaction ends, while lastval() is still valid.
+			 */
+			if (protocol_routine != NULL &&
+				protocol_routine->capture_session_state != NULL)
+				protocol_routine->capture_session_state(&qc);
 			if (use_implicit_block)
 				EndImplicitTransactionBlock();
 			finish_xact_command();
 		}
-		else if (IsA(parsetree->stmt, TransactionStmt))
+		else if (IsA(parsetree->stmt, TransactionStmt) ||
+				 simple_query_statement_ends_xact)
 		{
 			/*
 			 * If this was a transaction control statement, commit it. We will
 			 * start a new xact command for the next command.
 			 */
+			if (protocol_routine != NULL &&
+				protocol_routine->capture_session_state != NULL)
+				protocol_routine->capture_session_state(&qc);
 			finish_xact_command();
 		}
 		else
@@ -2215,7 +2452,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	 */
 	receiver = CreateDestReceiver(dest);
 	if (dest == DestRemoteExecute)
-		SetRemoteDestReceiverParams(receiver, portal);
+		ProtocolSetRemoteDestReceiverParams(receiver, portal);
 
 	/*
 	 * Ensure we are in a transaction command (this should normally be the
@@ -2855,6 +3092,25 @@ finish_xact_command(void)
 
 		xact_started = false;
 	}
+}
+
+/*
+ * Compatibility protocol handlers can consume commands before the normal
+ * PostgresMain switch.  Keep their transaction and timeout lifecycle here,
+ * rather than allowing adapters to manipulate xact_started directly.
+ */
+void
+ProtocolStartCommand(void)
+{
+	/* Compatibility commands bypass the normal PostgresMain switch. */
+	SetCurrentStatementStartTimestamp();
+	start_xact_command();
+}
+
+void
+ProtocolFinishCommand(void)
+{
+	finish_xact_command();
 }
 
 
@@ -4318,6 +4574,14 @@ PostgresMain(const char *dbname, const char *username)
 	SetProcessingMode(NormalProcessing);
 
 	/*
+	 * Compatibility protocols select their logical namespace only after the
+	 * physical database and role are established.  This intentionally
+	 * precedes GUC reporting so a non-PostgreSQL client cannot receive a
+	 * PostgreSQL ParameterStatus packet during session startup.
+	 */
+	ProtocolSessionInitialize(MyProcPort);
+
+	/*
 	 * Now all GUC states are fully set up.  Report them to client if
 	 * appropriate.
 	 */
@@ -4738,7 +5002,7 @@ PostgresMain(const char *dbname, const char *username)
 		/*
 		 * (3) read a command (loop blocks here)
 		 */
-		firstchar = ReadCommand(&input_message);
+		firstchar = ProtocolReadCommand(&input_message);
 
 		/*
 		 * (4) turn off the idle-in-transaction and idle-session timeouts if
@@ -4796,6 +5060,11 @@ PostgresMain(const char *dbname, const char *username)
 		 * (7) process the command.  But ignore it if we're skipping till
 		 * Sync.
 		 */
+		if (firstchar != EOF &&
+			ProtocolProcessCommand(&firstchar, &input_message) ==
+			PROTOCOL_COMMAND_HANDLED)
+			continue;
+
 		if (ignore_till_sync && firstchar != EOF)
 			continue;
 
@@ -4804,20 +5073,32 @@ PostgresMain(const char *dbname, const char *username)
 			case PqMsg_Query:
 				{
 					const char *query_string;
+					const ProtocolRoutine *protocol_routine;
+					const ParserRoutine *parser_routine;
 
 					/* Set statement_timestamp() */
 					SetCurrentStatementStartTimestamp();
 
 					query_string = pq_getmsgstring(&input_message);
 					pq_getmsgend(&input_message);
+					/*
+					 * Dialect parser is bound to the connection's protocol
+					 * at startup (ProtocolRoutine.parser_routine); PG and
+					 * bootstrap connections fall back to the standard
+					 * parser.
+					 */
+					protocol_routine = GetCurrentProtocolRoutine();
+					parser_routine = protocol_routine != NULL &&
+						protocol_routine->parser_routine != NULL ?
+						protocol_routine->parser_routine : GetStandardParserRoutine();
 
 					if (am_walsender)
 					{
 						if (!exec_replication_command(query_string))
-							exec_simple_query(query_string);
+							exec_simple_query(query_string, parser_routine);
 					}
 					else
-						exec_simple_query(query_string);
+						exec_simple_query(query_string, parser_routine);
 
 					valgrind_report_error_query(query_string);
 

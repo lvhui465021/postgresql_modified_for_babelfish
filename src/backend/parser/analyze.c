@@ -34,6 +34,7 @@
 #include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
+#include "parser/parsereng.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_coerce.h"
@@ -139,8 +140,20 @@ static bool test_raw_expression_coverage(Node *node, void *context);
  */
 Query *
 parse_analyze_fixedparams(RawStmt *parseTree, const char *sourceText,
-						  const Oid *paramTypes, int numParams,
-						  QueryEnvironment *queryEnv)
+							  const Oid *paramTypes, int numParams,
+							  QueryEnvironment *queryEnv)
+{
+	return parse_analyze_fixedparams_with_routine(parseTree, sourceText,
+												 paramTypes, numParams, queryEnv,
+												 GetStandardParserRoutine());
+}
+
+Query *
+parse_analyze_fixedparams_with_routine(RawStmt *parseTree,
+									  const char *sourceText,
+									  const Oid *paramTypes, int numParams,
+									  QueryEnvironment *queryEnv,
+									  const ParserRoutine *parser_routine)
 {
 	ParseState *pstate = make_parsestate(NULL);
 	Query	   *query;
@@ -149,6 +162,7 @@ parse_analyze_fixedparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_parser_routine = parser_routine;
 
 	if (numParams > 0)
 		setup_parse_fixed_parameters(pstate, paramTypes, numParams);
@@ -185,6 +199,23 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 						Oid **paramTypes, int *numParams,
 						QueryEnvironment *queryEnv)
 {
+	return parse_analyze_varparams_with_routine(parseTree, sourceText,
+														paramTypes, numParams, queryEnv,
+														GetStandardParserRoutine());
+}
+
+/*
+ * Variant of parse_analyze_varparams for compatibility parsers.  Variable
+ * parameters must use the same transform routine as the raw parse tree:
+ * otherwise a MySQL '?' marker can parse successfully but later be analyzed
+ * as PostgreSQL syntax when a cached plan is prepared or revalidated.
+ */
+Query *
+parse_analyze_varparams_with_routine(RawStmt *parseTree, const char *sourceText,
+									 Oid **paramTypes, int *numParams,
+									 QueryEnvironment *queryEnv,
+									 const ParserRoutine *parser_routine)
+{
 	ParseState *pstate = make_parsestate(NULL);
 	Query	   *query;
 	JumbleState *jstate = NULL;
@@ -192,6 +223,7 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_parser_routine = parser_routine;
 
 	setup_parse_variable_parameters(pstate, paramTypes, numParams);
 
@@ -295,8 +327,13 @@ transformTopLevelStmt(ParseState *pstate, RawStmt *parseTree) ///
 {
 	Query	   *result;
 
-	/* We're at top level, so allow SELECT INTO */
-	result = transformOptionalSelectInto(pstate, parseTree->stmt);
+	/* We're at top level, so allow dialect-specific SELECT INTO handling. */
+	if (pstate->p_parser_routine != NULL &&
+		pstate->p_parser_routine->transformOptionalSelectInto != NULL)
+		result = pstate->p_parser_routine->transformOptionalSelectInto(pstate,
+																parseTree->stmt);
+	else
+		result = transformOptionalSelectInto(pstate, parseTree->stmt);
 
 	result->stmt_location = parseTree->stmt_location;
 	result->stmt_len = parseTree->stmt_len;
@@ -1305,8 +1342,16 @@ transformOnConflictClause(ParseState *pstate,
 	}
 
 	/* Process the arbiter clause, ON CONFLICT ON (...) */
-	transformOnConflictArbiter(pstate, onConflictClause, &arbiterElems,
-							   &arbiterWhere, &arbiterConstraint);
+	if (pstate->p_parser_routine != NULL &&
+		pstate->p_parser_routine->transformOnConflictArbiter != NULL)
+		pstate->p_parser_routine->transformOnConflictArbiter(pstate,
+													 onConflictClause,
+													 &arbiterElems,
+													 &arbiterWhere,
+													 &arbiterConstraint);
+	else
+		transformOnConflictArbiter(pstate, onConflictClause, &arbiterElems,
+								   &arbiterWhere, &arbiterConstraint);
 
 	/* Process DO UPDATE */
 	if (onConflictClause->action == ONCONFLICT_UPDATE)

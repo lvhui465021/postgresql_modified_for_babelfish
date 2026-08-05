@@ -761,6 +761,7 @@ typedef struct ColumnDef
 	char		storage;		/* attstorage setting, or 0 for default */
 	char	   *storage_name;	/* attstorage setting name or NULL for default */
 	Node	   *raw_default;	/* default value (untransformed parse tree) */
+	char		mysql_default_kind; /* MySQL literal/expression default provenance */
 	Node	   *cooked_default; /* default value (transformed expr tree) */
 	char		identity;		/* attidentity setting */
 	RangeVar   *identitySequence;	/* to store identity sequence name for
@@ -2197,6 +2198,7 @@ typedef struct SelectStmt
 	List	   *targetList;		/* the target list (of ResTarget) */
 	List	   *fromClause;		/* the FROM clause */
 	Node	   *whereClause;	/* WHERE qualification */
+	bool		calcFoundRows;	/* SQL_CALC_FOUND_ROWS specified */
 	List	   *groupClause;	/* GROUP BY clauses */
 	bool		groupDistinct;	/* Is this GROUP BY DISTINCT? */
 	Node	   *havingClause;	/* HAVING conditional-expression */
@@ -2493,6 +2495,15 @@ typedef enum AlterTableType
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
 	AT_ReAddStatistics,			/* internal to commands/tablecmds.c */
+	AT_ModifyColumn,			/* MySQL: modify column */
+	AT_ChangeColumn,			/* MySQL: change column */
+	AT_TableOption,				/* MySQL: alter table option */
+	AT_CheckNotNull,			/* check column is already marked not null */
+	AT_DropPrimaryKey,			/* drop primary key */
+	AT_DropIndex,				/* drop index */
+	AT_DropForeignKey,			/* drop foreign key */
+	AT_DropCheck,				/* drop check */
+	AT_DropCheckRecurse,		/* internal to commands/tablecmds.c */
 } AlterTableType;
 
 typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
@@ -2506,6 +2517,7 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 	RoleSpec   *newowner;
 	Node	   *def;			/* definition of new column, index,
 								 * constraint, or parent table */
+	char		mysql_default_kind; /* MySQL default provenance for AT_ColumnDefault */
 	DropBehavior behavior;		/* RESTRICT or CASCADE for DROP cases */
 	bool		missing_ok;		/* skip error if missing? */
 	char	   *schemaname;
@@ -2825,6 +2837,8 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_ATTR_IMMEDIATE,
 	CONSTR_ATTR_ENFORCED,
 	CONSTR_ATTR_NOT_ENFORCED,
+	CONSTR_AUTOINC,				/* MySQL: auto_increment */
+	CONSTR_KEY,					/* MySQL: key/index */
 } ConstrType;
 
 /* Foreign key action codes */

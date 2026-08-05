@@ -194,6 +194,7 @@ typedef Node *(*CoerceParamHook) (ParseState *pstate, Param *param,
 struct ParseState
 {
 	ParseState *parentParseState;	/* stack link */
+	const struct ParserRoutine *p_parser_routine;
 	const char *p_sourcetext;	/* source text, or NULL if not available */
 	List	   *p_rtable;		/* range table so far */
 	List	   *p_rteperminfos; /* list of RTEPermissionInfo nodes for each

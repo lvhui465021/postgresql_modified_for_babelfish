@@ -64,6 +64,7 @@
 #include "optimizer/planmain.h"
 #include "parser/parse_expr.h"
 #include "parser/parser.h"
+#include "parser/parsereng.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
@@ -415,6 +416,7 @@ static const struct config_enum_entry plan_cache_mode_options[] = {
 
 static const struct config_enum_entry password_encryption_options[] = {
 	{"md5", PASSWORD_TYPE_MD5, false},
+	{"mysql_native_password", PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD, false},
 	{"scram-sha-256", PASSWORD_TYPE_SCRAM_SHA_256, false},
 	{NULL, 0, false}
 };
@@ -508,6 +510,12 @@ static const struct config_enum_entry file_extend_method_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry database_compat_mode_options[] = {
+	{"postgresql", COMPAT_PROTOCOL_POSTGRES, false},
+	{"mysql", COMPAT_PROTOCOL_MYSQL, false},
+	{NULL, 0, false}
+};
+
 /*
  * Options for enum values stored in other modules
  */
@@ -569,6 +577,11 @@ int			temp_file_limit = -1;
 int			num_temp_buffers = 1024;
 
 char	   *cluster_name = "";
+char	   *mysql_server_version = "8.4.10-openhalo-1.0";
+char	   *mysql_backend_database = "postgres";
+bool		mysql_listener_on = false;
+int			mysql_port = 3306;
+int			mysql_max_allowed_packet = 64 * 1024 * 1024;
 char	   *ConfigFileName;
 char	   *HbaFileName;
 char	   *IdentFileName;
@@ -1112,6 +1125,16 @@ struct config_bool ConfigureNamesBool[] =
 		&enable_bonjour,
 		false,
 		check_bonjour, NULL, NULL
+	},
+	{
+		{"mysql_listener_on", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
+			gettext_noop("Enables the MySQL compatibility listener."),
+			gettext_noop("The listener uses listen_addresses and mysql_port."),
+			GUC_SUPERUSER_ONLY
+		},
+		&mysql_listener_on,
+		false,
+		NULL, NULL, NULL
 	},
 	{
 		{"track_commit_timestamp", PGC_POSTMASTER, REPLICATION_SENDING,
@@ -2542,6 +2565,27 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&PostPortNumber,
 		DEF_PGPORT, 1, 65535,
+		NULL, NULL, NULL
+	},
+	{
+		{"mysql_port", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the TCP port for the MySQL compatibility listener."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&mysql_port,
+		3306, 1, 65535,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"mysql_max_allowed_packet", PGC_SIGHUP, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the maximum MySQL packet payload accepted by a backend."),
+			NULL,
+			GUC_UNIT_BYTE | GUC_SUPERUSER_ONLY
+		},
+		&mysql_max_allowed_packet,
+		64 * 1024 * 1024, 1024, MaxAllocSize - 1,
 		NULL, NULL, NULL
 	},
 
@@ -4691,6 +4735,28 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"mysql_backend_database", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the physical PostgreSQL database used by MySQL sessions."),
+			gettext_noop("The MySQL protocol database name selects a schema and does not override this setting."),
+			GUC_SUPERUSER_ONLY
+		},
+		&mysql_backend_database,
+		"postgres",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"mysql_server_version", PGC_SIGHUP, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the server version advertised by the MySQL listener."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&mysql_server_version,
+		"8.4.10-openhalo-1.0",
+		NULL, NULL, NULL
+	},
+
+	{
 		/*
 		 * Can't be set by ALTER SYSTEM as it can lead to recursive definition
 		 * of data_directory.
@@ -5468,6 +5534,17 @@ struct config_enum ConfigureNamesEnum[] =
 		&io_method,
 		DEFAULT_IO_METHOD, io_method_options,
 		NULL, assign_io_method, NULL
+	},
+
+	{
+		{"database_compat_mode", PGC_POSTMASTER, COMPAT_OPTIONS_OTHER,
+			gettext_noop("Sets the database compatibility mode."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&database_compat_mode,
+		COMPAT_PROTOCOL_POSTGRES, database_compat_mode_options,
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

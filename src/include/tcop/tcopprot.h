@@ -20,6 +20,8 @@
 #include "utils/guc.h"
 #include "utils/queryenvironment.h"
 
+struct ParserRoutine;
+
 
 extern PGDLLIMPORT CommandDest whereToSendOutput;
 extern PGDLLIMPORT const char *debug_query_string;
@@ -46,16 +48,30 @@ extern PGDLLIMPORT int log_statement;
 extern PGDLLIMPORT int restrict_nonsystem_relation_kind;
 
 extern List *pg_parse_query(const char *query_string);
+extern List *pg_parse_query_with_routine(const char *query_string,
+										 const struct ParserRoutine *parser_routine);
 extern List *pg_rewrite_query(Query *query);
 extern List *pg_analyze_and_rewrite_fixedparams(RawStmt *parsetree,
 												const char *query_string,
 												const Oid *paramTypes, int numParams,
 												QueryEnvironment *queryEnv);
+extern List *pg_analyze_and_rewrite_fixedparams_with_routine(RawStmt *parsetree,
+															 const char *query_string,
+															 const Oid *paramTypes,
+															 int numParams,
+															 QueryEnvironment *queryEnv,
+															 const struct ParserRoutine *parser_routine);
 extern List *pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
 											  const char *query_string,
 											  Oid **paramTypes,
 											  int *numParams,
 											  QueryEnvironment *queryEnv);
+extern List *pg_analyze_and_rewrite_varparams_with_routine(RawStmt *parsetree,
+														  const char *query_string,
+														  Oid **paramTypes,
+														  int *numParams,
+														  QueryEnvironment *queryEnv,
+														  const struct ParserRoutine *parser_routine);
 extern List *pg_analyze_and_rewrite_withcb(RawStmt *parsetree,
 										   const char *query_string,
 										   ParserSetupHook parserSetup,
@@ -84,6 +100,11 @@ pg_noreturn extern void PostgresSingleUserMain(int argc, char *argv[],
 pg_noreturn extern void PostgresMain(const char *dbname,
 									 const char *username);
 extern void ResetUsage(void);
+
+/* Compatibility handlers retain PostgresMain transaction bookkeeping. */
+extern void ProtocolStartCommand(void);
+extern void ProtocolFinishCommand(void);
+
 extern void ShowUsage(const char *title);
 extern int	check_log_duration(char *msec_str, bool was_logged);
 extern PGDLLEXPORT bool check_log_statement(List *stmt);
