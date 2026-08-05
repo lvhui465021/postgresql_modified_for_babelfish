@@ -29,6 +29,7 @@ pg_dump_common = static_library('libpgdump_common',
 
 pg_dump_sources = files(
   'common.c',
+  'dump_babel_utils.c',
   'pg_dump.c',
   'pg_dump_sort.c',
 )
@@ -49,6 +50,7 @@ bin_targets += pg_dump
 
 
 pg_dumpall_sources = files(
+  'dumpall_babel_utils.c',
   'pg_dumpall.c',
 )
 
