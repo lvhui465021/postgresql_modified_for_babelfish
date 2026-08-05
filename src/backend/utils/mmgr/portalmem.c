@@ -662,6 +662,21 @@ HoldPortal(Portal portal)
 }
 
 /*
+ * Materialize one ready portal before the current command finishes.  The
+ * normal transaction pre-commit path uses HoldPortal() internally; protocol
+ * frontends that require MySQL-style cursor-open semantics use this wrapper.
+ */
+void
+PortalHoldForProtocol(Portal portal)
+{
+	Assert(PortalIsValid(portal));
+	Assert((portal->cursorOptions & CURSOR_OPT_HOLD) != 0);
+	Assert(portal->createSubid != InvalidSubTransactionId);
+	Assert(portal->status == PORTAL_READY);
+	HoldPortal(portal);
+}
+
+/*
  * Pre-commit processing for portals.
  *
  * Holdable cursors created in this transaction need to be converted to

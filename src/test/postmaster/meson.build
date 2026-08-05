@@ -9,6 +9,8 @@ tests += {
       't/001_basic.pl',
       't/002_connection_limits.pl',
       't/003_start_stop.pl',
+      't/004_mysql_protocol.pl',
+      't/005_mysql_listener_stability.pl',
     ],
   },
 }

@@ -21,7 +21,12 @@ typedef struct AttributeOpts
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	float8		n_distinct;
 	float8		n_distinct_inherited;
+	int			mysql_default_kind;
 } AttributeOpts;
+
+#define MYSQL_DEFAULT_KIND_NONE		0
+#define MYSQL_DEFAULT_KIND_LITERAL	1
+#define MYSQL_DEFAULT_KIND_EXPRESSION 2
 
 extern AttributeOpts *get_attribute_options(Oid attrelid, int attnum);
 

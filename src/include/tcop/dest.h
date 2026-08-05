@@ -145,4 +145,11 @@ extern void EndReplicationCommand(const char *commandTag);
 extern void NullCommand(CommandDest dest);
 extern void ReadyForQuery(CommandDest dest);
 
+/* Standard (built-in PostgreSQL) implementations callable from compat routines. */
+extern DestReceiver *standard_CreateDestReceiver(CommandDest dest);
+extern void standard_EndCommand(const QueryCompletion *qc, CommandDest dest,
+								bool force_undecorated_output);
+extern void standard_NullCommand(CommandDest dest);
+extern void standard_ReadyForQuery(CommandDest dest);
+
 #endif							/* DEST_H */

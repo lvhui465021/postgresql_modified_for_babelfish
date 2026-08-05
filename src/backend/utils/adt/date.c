@@ -31,6 +31,7 @@
 #include "parser/scansup.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/adtext.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
@@ -127,6 +128,9 @@ date_in(PG_FUNCTION_ARGS)
 	int			ftype[MAXDATEFIELDS];
 	char		workbuf[MAXDATELEN + 1];
 	DateTimeErrorExtra extra;
+
+	if (adtext != NULL && adtext->date_in != NULL)
+		return adtext->date_in(fcinfo);
 
 	dterr = ParseDateTime(str, workbuf, sizeof(workbuf),
 						  field, ftype, MAXDATEFIELDS, &nf);
@@ -1457,6 +1461,9 @@ time_in(PG_FUNCTION_ARGS)
 	int			ftype[MAXDATEFIELDS];
 	DateTimeErrorExtra extra;
 
+	if (adtext != NULL && adtext->pre_time_in != NULL)
+		PG_RETURN_TIMEADT(adtext->pre_time_in(fcinfo));
+
 	dterr = ParseDateTime(str, workbuf, sizeof(workbuf),
 						  field, ftype, MAXDATEFIELDS, &nf);
 	if (dterr == 0)
@@ -1571,6 +1578,9 @@ time_out(PG_FUNCTION_ARGS)
 			   *tm = &tt;
 	fsec_t		fsec;
 	char		buf[MAXDATELEN + 1];
+
+	if (adtext != NULL && adtext->post_time_out != NULL)
+		PG_RETURN_CSTRING(adtext->post_time_out(fcinfo));
 
 	time2tm(time, tm, &fsec);
 	EncodeTimeOnly(tm, fsec, false, 0, DateStyle, buf);
@@ -2356,6 +2366,9 @@ timetz_in(PG_FUNCTION_ARGS)
 	int			ftype[MAXDATEFIELDS];
 	DateTimeErrorExtra extra;
 
+	if (adtext != NULL && adtext->pre_timetz_in != NULL)
+		str = adtext->pre_timetz_in(str);
+
 	dterr = ParseDateTime(str, workbuf, sizeof(workbuf),
 						  field, ftype, MAXDATEFIELDS, &nf);
 	if (dterr == 0)
@@ -2385,6 +2398,9 @@ timetz_out(PG_FUNCTION_ARGS)
 	fsec_t		fsec;
 	int			tz;
 	char		buf[MAXDATELEN + 1];
+
+	if (adtext != NULL && adtext->post_timetz_out != NULL)
+		PG_RETURN_CSTRING(adtext->post_timetz_out((void *) time));
 
 	timetz2tm(time, tm, &fsec, &tz);
 	EncodeTimeOnly(tm, fsec, true, tz, DateStyle, buf);

@@ -33,6 +33,7 @@
 #include "parser/scansup.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/adtext.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/float.h"
@@ -184,6 +185,12 @@ timestamp_in(PG_FUNCTION_ARGS)
 	char		workbuf[MAXDATELEN + MAXDATEFIELDS];
 	DateTimeErrorExtra extra;
 
+	if (adtext != NULL && adtext->pre_timestamp_in != NULL)
+		str = adtext->pre_timestamp_in(str);
+
+	if (adtext != NULL && adtext->timestamp_in != NULL)
+		return adtext->timestamp_in(fcinfo);
+
 	dterr = ParseDateTime(str, workbuf, sizeof(workbuf),
 						  field, ftype, MAXDATEFIELDS, &nf);
 	if (dterr == 0)
@@ -243,7 +250,12 @@ timestamp_out(PG_FUNCTION_ARGS)
 	if (TIMESTAMP_NOT_FINITE(timestamp))
 		EncodeSpecialTimestamp(timestamp, buf);
 	else if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) == 0)
-		EncodeDateTime(tm, fsec, false, 0, NULL, DateStyle, buf);
+	{
+		if (adtext != NULL && adtext->post_timestamp_out != NULL)
+			adtext->post_timestamp_out(&timestamp, DateStyle, buf);
+		else
+			EncodeDateTime(tm, fsec, false, 0, NULL, DateStyle, buf);
+	}
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),

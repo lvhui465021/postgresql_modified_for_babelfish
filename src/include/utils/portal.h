@@ -236,12 +236,19 @@ extern void MarkPortalFailed(Portal portal);
 extern void PortalDrop(Portal portal, bool isTopCommit);
 extern Portal GetPortalByName(const char *name);
 extern void PortalDefineQuery(Portal portal,
-							  const char *prepStmtName,
-							  const char *sourceText,
-							  CommandTag commandTag,
-							  List *stmts,
-							  CachedPlan *cplan);
+								  const char *prepStmtName,
+								  const char *sourceText,
+								  CommandTag commandTag,
+								  List *stmts,
+								  CachedPlan *cplan);
 extern PlannedStmt *PortalGetPrimaryStmt(Portal portal);
+
+/*
+ * Materialize a ready holdable portal immediately.  This is for protocol
+ * frontends that need cursor-open semantics within the current command,
+ * rather than waiting for transaction pre-commit processing.
+ */
+extern void PortalHoldForProtocol(Portal portal);
 extern void PortalCreateHoldStore(Portal portal);
 extern void PortalHashTableDeleteAll(void);
 extern bool ThereAreNoReadyPortals(void);

@@ -150,6 +150,7 @@ static char *datlocale = NULL;
 static bool icu_locale_specified = false;
 static char *icu_rules = NULL;
 static const char *default_text_search_config = NULL;
+static bool mysql_mode = false;
 static char *username = NULL;
 static bool pwprompt = false;
 static char *pwfilename = NULL;
@@ -1435,6 +1436,24 @@ setup_config(void)
 									  gvalues->str, false);
 	}
 
+	if (mysql_mode)
+	{
+		/*
+		 * MySQL compatibility mode: pin the cluster dialect, preload the
+		 * mysql_parser/mysm/aux_mysql shared libraries so the parser, ADT
+		 * table and protocol listener are registered before any backend
+		 * initializes, and enable the MySQL listener so the compatibility
+		 * mode is usable out of the box (the standard PG listener stays
+		 * active alongside it).
+		 */
+		conflines = replace_guc_value(conflines, "database_compat_mode",
+									  "mysql", false);
+		conflines = replace_guc_value(conflines, "shared_preload_libraries",
+									  "mysql_parser, mysm, aux_mysql", false);
+		conflines = replace_guc_value(conflines, "mysql_listener_on",
+									  "true", false);
+	}
+
 	/* ... and write out the finished postgresql.conf file */
 	snprintf(path, sizeof(path), "%s/postgresql.conf", pg_data);
 
@@ -2526,6 +2545,7 @@ usage(const char *progname)
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
+	printf(_("  -m, --compat-mode=mysql   initialize in MySQL compatibility mode\n"));
 	printf(_("      --icu-locale=LOCALE   set ICU locale ID for new databases\n"));
 	printf(_("      --icu-rules=RULES     set additional ICU collation rules for new databases\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
@@ -3189,6 +3209,7 @@ main(int argc, char *argv[])
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
+		{"compat-mode", required_argument, NULL, 'm'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{"discard-caches", no_argument, NULL, 14},
 		{"locale-provider", required_argument, NULL, 15},
@@ -3239,7 +3260,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:c:dD:E:gkL:nNsST:U:WX:",
+	while ((c = getopt_long(argc, argv, "A:c:dD:E:gkL:m:nNsST:U:WX:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -3358,6 +3379,12 @@ main(int argc, char *argv[])
 				break;
 			case 'g':
 				SetDataDirectoryCreatePerm(PG_DIR_MODE_GROUP);
+				break;
+			case 'm':
+				if (strcmp(optarg, "mysql") == 0)
+					mysql_mode = true;
+				else
+					pg_fatal("unrecognized compatibility mode: %s", optarg);
 				break;
 			case 14:
 				extra_options = psprintf("%s %s",

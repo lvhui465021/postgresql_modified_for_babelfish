@@ -24,6 +24,7 @@ SUBDIRS = \
 		  test_dsm_registry \
 		  test_escape \
 		  test_extensions \
+		  test_generated_nodes \
 		  test_ginpostinglist \
 		  test_integerset \
 		  test_json_parser \

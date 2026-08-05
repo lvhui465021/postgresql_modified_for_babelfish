@@ -25,6 +25,20 @@
  */
 #define MAX_ENCRYPTED_PASSWORD_LEN (512)
 
+/*
+ * OpenHalo's MySQL native-password secret format.  It stores
+ * SHA1(SHA1(password)) as lowercase hexadecimal after this prefix.  The
+ * format is deliberately not exposed through password_encryption: standard
+ * PostgreSQL sessions must continue to use only PostgreSQL-supported secret
+ * formats.
+ */
+#define MYSQL_NATIVE_PASSWORD_PREFIX "mysql_native_password:"
+#define MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH    20
+#define MYSQL_CACHING_SHA2_DIGEST_LENGTH       32
+#define MYSQL_NATIVE_PASSWORD_SECRET_LEN \
+	(sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1 + \
+	 MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH * 2)
+
 /* Enables deprecation warnings for MD5 passwords. */
 extern PGDLLIMPORT bool md5_password_warnings;
 
@@ -32,16 +46,20 @@ extern PGDLLIMPORT bool md5_password_warnings;
  * Types of password hashes or secrets.
  *
  * Plaintext passwords can be passed in by the user, in a CREATE/ALTER USER
- * command. They will be encrypted to MD5 or SCRAM-SHA-256 format, before
- * storing on-disk, so only MD5 and SCRAM-SHA-256 passwords should appear
- * in pg_authid.rolpassword. They are also the allowed values for the
- * password_encryption GUC.
+ * command. Standard PostgreSQL password handling encrypts them to MD5 or
+ * SCRAM-SHA-256 before storing on disk, and those remain the only values
+ * selectable through password_encryption.  A compatibility migration can
+ * additionally store an explicitly prefixed compatibility secret in
+ * pg_authid.rolpassword; it is accepted only by that protocol's dedicated
+ * authentication path.
  */
 typedef enum PasswordType
 {
 	PASSWORD_TYPE_PLAINTEXT = 0,
 	PASSWORD_TYPE_MD5,
 	PASSWORD_TYPE_SCRAM_SHA_256,
+	PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD,
+	PASSWORD_TYPE_MYSQL_CACHING_SHA2_PASSWORD,
 } PasswordType;
 
 extern PasswordType get_password_type(const char *shadow_pass);
@@ -57,4 +75,13 @@ extern int	plain_crypt_verify(const char *role, const char *shadow_pass,
 							   const char *client_pass,
 							   const char **logdetail);
 
+extern char *mysql_native_password_encrypt(const char *password);
+extern int	mysql_native_password_verify(const char *role,
+									 const char *shadow_pass,
+									 const uint8 *client_response,
+									 size_t client_response_len,
+									 const uint8 *salt, size_t salt_len,
+									 const char **logdetail);
+
 #endif
+extern int mysql_caching_sha2_password_verify(const char *role, const char *hex_hash, const uint8 *client_response, size_t client_response_len, const uint8 *salt, size_t salt_len, const char **logdetail);

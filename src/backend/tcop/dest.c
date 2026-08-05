@@ -40,6 +40,14 @@
 #include "executor/tstoreReceiver.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
+#include "postmaster/protocol_routine.h"
+
+static bool ProtocolDestIsRemote(CommandDest dest);
+DestReceiver *standard_CreateDestReceiver(CommandDest dest);
+void standard_EndCommand(const QueryCompletion *qc, CommandDest dest,
+						 bool force_undecorated_output);
+void standard_NullCommand(CommandDest dest);
+void standard_ReadyForQuery(CommandDest dest);
 
 
 /* ----------------
@@ -109,8 +117,16 @@ BeginCommand(CommandTag commandTag, CommandDest dest)
  *		CreateDestReceiver - return appropriate receiver function set for dest
  * ----------------
  */
+static bool
+ProtocolDestIsRemote(CommandDest dest)
+{
+	return dest == DestRemote || dest == DestRemoteExecute ||
+		dest == DestRemoteSimple;
+}
+
+/* Standard PostgreSQL receiver selection retained as the routine fallback. */
 DestReceiver *
-CreateDestReceiver(CommandDest dest)
+standard_CreateDestReceiver(CommandDest dest)
 {
 	/*
 	 * It's ok to cast the constness away as any modification of the none
@@ -161,12 +177,59 @@ CreateDestReceiver(CommandDest dest)
 	pg_unreachable();
 }
 
+DestReceiver *
+CreateDestReceiver(CommandDest dest)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES &&
+		ProtocolDestIsRemote(dest))
+	{
+		if (routine->create_dest_receiver == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no remote tuple receiver",
+							routine->name)));
+
+		return routine->create_dest_receiver(dest);
+	}
+
+	return standard_CreateDestReceiver(dest);
+}
+
+/*
+ * Keep printtup's standard portal setup behind the same protocol boundary as
+ * receiver creation.  A compatibility receiver has different private state
+ * and must never be cast to DR_printtup.
+ */
+void
+ProtocolSetRemoteDestReceiverParams(DestReceiver *receiver,
+									struct PortalData *portal)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		if (routine->set_remote_dest_receiver_params == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no remote receiver setup",
+							routine->name)));
+
+		routine->set_remote_dest_receiver_params(receiver, portal);
+		return;
+	}
+
+	SetRemoteDestReceiverParams(receiver, portal);
+}
+
 /* ----------------
  *		EndCommand - clean up the destination at end of command
  * ----------------
  */
 void
-EndCommand(const QueryCompletion *qc, CommandDest dest, bool force_undecorated_output)
+standard_EndCommand(const QueryCompletion *qc, CommandDest dest,
+					bool force_undecorated_output)
 {
 	char		completionTag[COMPLETION_TAG_BUFSIZE];
 	Size		len;
@@ -195,6 +258,28 @@ EndCommand(const QueryCompletion *qc, CommandDest dest, bool force_undecorated_o
 	}
 }
 
+void
+EndCommand(const QueryCompletion *qc, CommandDest dest,
+			 bool force_undecorated_output)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES &&
+		ProtocolDestIsRemote(dest))
+	{
+		if (routine->end_command == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no command-completion encoder",
+							routine->name)));
+
+		routine->end_command(qc, dest, force_undecorated_output);
+		return;
+	}
+
+	standard_EndCommand(qc, dest, force_undecorated_output);
+}
+
 /* ----------------
  *		EndReplicationCommand - stripped down version of EndCommand
  *
@@ -215,7 +300,7 @@ EndReplicationCommand(const char *commandTag)
  * ----------------
  */
 void
-NullCommand(CommandDest dest)
+standard_NullCommand(CommandDest dest)
 {
 	switch (dest)
 	{
@@ -241,6 +326,27 @@ NullCommand(CommandDest dest)
 	}
 }
 
+void
+NullCommand(CommandDest dest)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES &&
+		ProtocolDestIsRemote(dest))
+	{
+		if (routine->null_command == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no empty-query encoder",
+							routine->name)));
+
+		routine->null_command(dest);
+		return;
+	}
+
+	standard_NullCommand(dest);
+}
+
 /* ----------------
  *		ReadyForQuery - tell dest that we are ready for a new query
  *
@@ -253,7 +359,7 @@ NullCommand(CommandDest dest)
  * ----------------
  */
 void
-ReadyForQuery(CommandDest dest)
+standard_ReadyForQuery(CommandDest dest)
 {
 	switch (dest)
 	{
@@ -283,4 +389,25 @@ ReadyForQuery(CommandDest dest)
 		case DestExplainSerialize:
 			break;
 	}
+}
+
+void
+ReadyForQuery(CommandDest dest)
+{
+	const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+	if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES &&
+		ProtocolDestIsRemote(dest))
+	{
+		if (routine->send_ready_for_query == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("protocol \"%s\" has no ready-for-query encoder",
+							routine->name)));
+
+		routine->send_ready_for_query(dest);
+		return;
+	}
+
+	standard_ReadyForQuery(dest);
 }

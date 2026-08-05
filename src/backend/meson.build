@@ -8,6 +8,7 @@ generated_backend_sources = []
 post_export_backend_sources = []
 
 subdir('access')
+subdir('adapter')
 subdir('archive')
 subdir('backup')
 subdir('bootstrap')
@@ -196,3 +197,38 @@ subdir('replication/libpqwalreceiver')
 subdir('replication/pgoutput')
 subdir('snowball')
 subdir('utils/mb/conversion_procs')
+
+# Ensure the compatibility vtables contain no declared-but-unconsumed slots.
+# This is the executable form of the stage-1 dead-contract invariant.
+test('mysql_vtable_contract',
+  find_program(join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_vtable_contract.sh')),
+  args: [meson.project_source_root()])
+
+# Keep the single Meson build graph explicit: the parser keyword generator and
+# all loadable MySQL layers must be reachable from Meson, with no orphaned
+# parser Makefile/meson.build capable of diverging from it.
+test('mysql_build_graph_contract',
+  find_program(join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_build_graph.sh')),
+  args: [meson.project_source_root()])
+
+# Detect silent semantic drift between the MySQL fork files and their
+# upstream counterparts (a merge conflict would self-report; drift does not).
+# The forks currently contain functions / grammar rules that diverge from
+# upstream by more than the threshold; this is the known baseline to be
+# worked down, hence should_fail: the check reports drift (expected
+# failure) now, and an unexpected pass once a function falls back under the
+# threshold, prompting removal of the should_fail flag.
+check_fork_drift = find_program(
+  join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_fork_drift.sh'))
+test('mysql_fork_drift_tablecmds',
+  check_fork_drift,
+  args: ['50',
+    join_paths(meson.project_source_root(), 'src', 'backend', 'commands', 'mysql', 'mys_tablecmds.c'),
+    join_paths(meson.project_source_root(), 'src', 'backend', 'commands', 'tablecmds.c')],
+  should_fail: true)
+test('mysql_fork_drift_gram',
+  check_fork_drift,
+  args: ['30',
+    join_paths(meson.project_source_root(), 'src', 'backend', 'parser', 'mysql', 'mys_gram.y'),
+    join_paths(meson.project_source_root(), 'src', 'backend', 'parser', 'gram.y')],
+  should_fail: true)

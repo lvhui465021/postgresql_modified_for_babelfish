@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "catalog/pg_authid.h"
+#include "common/cryptohash.h"
 #include "common/md5.h"
 #include "common/scram-common.h"
 #include "libpq/crypt.h"
@@ -26,6 +27,12 @@
 
 /* Enables deprecation warnings for MD5 passwords. */
 bool		md5_password_warnings = true;
+
+static bool mysql_native_password_decode(const char *secret,
+										uint8 *stage2);
+static bool mysql_native_password_sha1(const uint8 *first, size_t first_len,
+									const uint8 *second, size_t second_len,
+									uint8 *result);
 
 /*
  * Fetch stored password for a user, for authentication.
@@ -103,6 +110,12 @@ get_password_type(const char *shadow_pass)
 	if (parse_scram_secret(shadow_pass, &iterations, &hash_type, &key_length,
 						   &encoded_salt, stored_key, server_key))
 		return PASSWORD_TYPE_SCRAM_SHA_256;
+	if (strlen(shadow_pass) == MYSQL_NATIVE_PASSWORD_SECRET_LEN &&
+		strncmp(shadow_pass, MYSQL_NATIVE_PASSWORD_PREFIX,
+				sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1) == 0 &&
+		strspn(shadow_pass + sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1,
+				"0123456789abcdef") == MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH * 2)
+		return PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD;
 	return PASSWORD_TYPE_PLAINTEXT;
 }
 
@@ -143,6 +156,10 @@ encrypt_password(PasswordType target_type, const char *role,
 
 			case PASSWORD_TYPE_SCRAM_SHA_256:
 				encrypted_password = pg_be_scram_build_secret(password);
+				break;
+
+			case PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD:
+				encrypted_password = mysql_native_password_encrypt(password);
 				break;
 
 			case PASSWORD_TYPE_PLAINTEXT:
@@ -302,6 +319,11 @@ plain_crypt_verify(const char *role, const char *shadow_pass,
 			}
 			break;
 
+		case PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD:
+			*logdetail = psprintf(_("User \"%s\" has a password that cannot be used with PostgreSQL password authentication."),
+							  role);
+			return STATUS_ERROR;
+
 		case PASSWORD_TYPE_PLAINTEXT:
 
 			/*
@@ -318,4 +340,230 @@ plain_crypt_verify(const char *role, const char *shadow_pass,
 	*logdetail = psprintf(_("Password of user \"%s\" is in unrecognized format."),
 						  role);
 	return STATUS_ERROR;
+}
+
+/*
+ * mysql_native_password_sha1
+ *
+ * Calculate SHA1(first || second).  Passing NULL with length zero is valid.
+ */
+static bool
+mysql_native_password_sha1(const uint8 *first, size_t first_len,
+						   const uint8 *second, size_t second_len,
+						   uint8 *result)
+{
+	pg_cryptohash_ctx *ctx;
+	bool		ok = false;
+
+	ctx = pg_cryptohash_create(PG_SHA1);
+	if (ctx == NULL)
+		return false;
+
+	if (pg_cryptohash_init(ctx) == 0 &&
+		(first_len == 0 || pg_cryptohash_update(ctx, first, first_len) == 0) &&
+		(second_len == 0 || pg_cryptohash_update(ctx, second, second_len) == 0) &&
+		pg_cryptohash_final(ctx, result,
+							MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH) == 0)
+		ok = true;
+
+	pg_cryptohash_free(ctx);
+	return ok;
+}
+
+/* Decode the lowercase hexadecimal SHA1(SHA1(password)) component. */
+static bool
+mysql_native_password_decode(const char *secret, uint8 *stage2)
+{
+	const char *hex = secret + sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1;
+	int			i;
+
+	for (i = 0; i < MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH; i++)
+	{
+		char		hi = hex[i * 2];
+		char		lo = hex[i * 2 + 1];
+		int			high;
+		int			low;
+
+		if (hi >= '0' && hi <= '9')
+			high = hi - '0';
+		else if (hi >= 'a' && hi <= 'f')
+			high = hi - 'a' + 10;
+		else
+			return false;
+
+		if (lo >= '0' && lo <= '9')
+			low = lo - '0';
+		else if (lo >= 'a' && lo <= 'f')
+			low = lo - 'a' + 10;
+		else
+			return false;
+
+		stage2[i] = (uint8) ((high << 4) | low);
+	}
+
+	return true;
+}
+
+/*
+ * mysql_native_password_encrypt
+ *
+ * Return the OpenHalo-format secret for a plaintext MySQL native password.
+ * This is intentionally separate from password_encryption, whose allowed
+ * PostgreSQL values remain MD5 and SCRAM-SHA-256.
+ */
+char *
+mysql_native_password_encrypt(const char *password)
+{
+	static const char hex[] = "0123456789abcdef";
+	uint8		stage1[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	uint8		stage2[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	char	   *secret;
+	int			i;
+
+	if (!mysql_native_password_sha1((const uint8 *) password, strlen(password),
+								NULL, 0, stage1) ||
+		!mysql_native_password_sha1(stage1, sizeof(stage1), NULL, 0, stage2))
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not calculate MySQL native password hash")));
+
+	secret = palloc(MYSQL_NATIVE_PASSWORD_SECRET_LEN + 1);
+	memcpy(secret, MYSQL_NATIVE_PASSWORD_PREFIX,
+		   sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1);
+	for (i = 0; i < MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH; i++)
+	{
+		secret[sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1 + i * 2] =
+			hex[stage2[i] >> 4];
+		secret[sizeof(MYSQL_NATIVE_PASSWORD_PREFIX) - 1 + i * 2 + 1] =
+			hex[stage2[i] & 0x0F];
+	}
+	secret[MYSQL_NATIVE_PASSWORD_SECRET_LEN] = '\0';
+
+	explicit_bzero(stage1, sizeof(stage1));
+	explicit_bzero(stage2, sizeof(stage2));
+	return secret;
+}
+
+/*
+ * mysql_native_password_verify
+ *
+ * Verify a mysql_native_password scramble against an OpenHalo-format secret:
+ *
+ *   client response = SHA1(password) XOR SHA1(salt || SHA1(SHA1(password)))
+ */
+int
+mysql_native_password_verify(const char *role, const char *shadow_pass,
+							 const uint8 *client_response,
+							 size_t client_response_len,
+							 const uint8 *salt, size_t salt_len,
+							 const char **logdetail)
+{
+	uint8		stage1[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	uint8		stage2[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	uint8		scramble[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	uint8		candidate_stage2[MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH];
+	int			i;
+	int			result = STATUS_ERROR;
+
+	if (get_password_type(shadow_pass) != PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD)
+	{
+		*logdetail = psprintf(_("User \"%s\" has a password that cannot be used with mysql_native_password authentication."),
+						  role);
+		return STATUS_ERROR;
+	}
+
+	if (client_response_len != MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH ||
+		!mysql_native_password_decode(shadow_pass, stage2) ||
+		!mysql_native_password_sha1(salt, salt_len, stage2, sizeof(stage2),
+									 scramble))
+	{
+		*logdetail = psprintf(_("Invalid mysql_native_password response for user \"%s\"."),
+						  role);
+		goto done;
+	}
+
+	for (i = 0; i < MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH; i++)
+		stage1[i] = client_response[i] ^ scramble[i];
+
+	if (!mysql_native_password_sha1(stage1, sizeof(stage1), NULL, 0,
+								  candidate_stage2))
+	{
+		*logdetail = psprintf(_("Could not verify mysql_native_password response for user \"%s\"."),
+						  role);
+		goto done;
+	}
+
+	if (timingsafe_bcmp(stage2, candidate_stage2, sizeof(stage2)) == 0)
+		result = STATUS_OK;
+	else
+		*logdetail = psprintf(_("Password does not match for user \"%s\"."), role);
+
+done:
+	explicit_bzero(stage1, sizeof(stage1));
+	explicit_bzero(stage2, sizeof(stage2));
+	explicit_bzero(scramble, sizeof(scramble));
+	explicit_bzero(candidate_stage2, sizeof(candidate_stage2));
+	return result;
+}
+
+
+/*
+ * mysql_caching_sha2_password_verify
+ *
+ * MySQL 8.0+ default auth: stored = SHA256(SHA256(password)).
+ * Client sends XOR(SHA256(password), SHA256(scramble + stored)).
+ * Verify: SHA256(XOR(resp, SHA256(scramble + stored))) == stored.
+ */
+int
+mysql_caching_sha2_password_verify(const char *role, const char *hex_hash,
+                                    const uint8 *client_response,
+                                    size_t client_response_len,
+                                    const uint8 *salt, size_t salt_len,
+                                    const char **logdetail)
+{
+    uint8       stored_hash[32];
+    uint8       scramble_hash[32];
+    uint8       recovered[32];
+    uint8       candidate[32];
+    int         i;
+    int         result = STATUS_ERROR;
+
+    if (hex_hash == NULL || strlen(hex_hash) != 64)
+    {
+        *logdetail = "Invalid caching_sha2_password hash";
+        return STATUS_ERROR;
+    }
+    for (i = 0; i < 32; i++)
+    {
+        char hx[3] = {hex_hash[i*2], hex_hash[i*2+1], 0};
+        stored_hash[i] = (uint8) strtol(hx, NULL, 16);
+    }
+
+    if (client_response_len != 32) { *logdetail = "Bad SHA256 response length"; goto done; }
+
+    /* scramble_hash = SHA256(salt || stored_hash) */
+    SHA256_CTX ctx;
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, salt, salt_len);
+    SHA256_Update(&ctx, stored_hash, sizeof(stored_hash));
+    SHA256_Final(scramble_hash, &ctx);
+
+    /* recovered = client_resp XOR scramble_hash */
+    for (i = 0; i < 32; i++) recovered[i] = client_response[i] ^ scramble_hash[i];
+
+    /* candidate = SHA256(recovered); compare with stored */
+    SHA256_Init(&ctx);
+    SHA256_Update(&ctx, recovered, sizeof(recovered));
+    SHA256_Final(candidate, &ctx);
+
+    result = (timingsafe_bcmp(stored_hash, candidate, 32) == 0) ? STATUS_OK : STATUS_ERROR;
+    if (result != STATUS_OK)
+        *logdetail = "Password does not match";
+
+done:
+    explicit_bzero(stored_hash, 32);
+    explicit_bzero(scramble_hash, 32);
+    explicit_bzero(recovered, 32);
+    explicit_bzero(candidate, 32);
+    return result;
 }

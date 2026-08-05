@@ -12,6 +12,7 @@ backend_link_with += numeric_backend_lib
 
 backend_sources += files(
   'acl.c',
+  'adtext.c',
   'amutils.c',
   'array_expanded.c',
   'array_selfuncs.c',
@@ -122,6 +123,8 @@ backend_sources += files(
   'xid8funcs.c',
   'xml.c',
 )
+
+subdir('mysql')
 
 
 jsonpath_scan = custom_target('jsonpath_scan',

@@ -74,7 +74,6 @@
 					# (change requires restart)
 #bonjour_name = ''			# defaults to the computer name
 					# (change requires restart)
-
 # - TCP settings -
 # see "man tcp" for details
 
@@ -98,6 +97,15 @@
 #scram_iterations = 4096
 #md5_password_warnings = on		# display md5 deprecation warnings?
 #oauth_validator_libraries = ''	# comma-separated list of trusted validator modules
+
+# - MySQL compatibility listener -
+
+#mysql_listener_on = off		# requires restart; uses listen_addresses
+#mysql_port = 3306			# requires restart
+#mysql_backend_database = 'postgres' # physical PostgreSQL database for MySQL sessions;
+					# MySQL USE selects a schema instead
+#mysql_server_version = '8.4.10-openhalo-1.0'
+#mysql_max_allowed_packet = 64MB
 
 # GSSAPI using Kerberos
 #krb_server_keyfile = 'FILE:${sysconfdir}/krb5.keytab'
@@ -838,6 +846,10 @@
 #------------------------------------------------------------------------------
 # VERSION AND PLATFORM COMPATIBILITY
 #------------------------------------------------------------------------------
+
+#database_compat_mode = 'postgresql'	# database compat mode, values can be:
+					# postgresql (default)
+					# mysql (MySQL compatibility mode)
 
 # - Previous PostgreSQL Versions -
 

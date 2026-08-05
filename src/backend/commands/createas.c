@@ -31,22 +31,29 @@
 #include "catalog/namespace.h"
 #include "catalog/toasting.h"
 #include "commands/createas.h"
+#include "commands/defrem.h"
 #include "commands/matview.h"
 #include "commands/prepare.h"
 #include "commands/tablecmds.h"
+#include "commands/trigger.h"
 #include "commands/view.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/queryjumble.h"
 #include "parser/analyze.h"
+#include "libpq/libpq-be.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+
+/* Hook for dialect-specific work after the CTAS target relation is created. */
+ExecCreateTableAs_post_hook_type ExecCreateTableAs_post_hook = NULL;
 
 typedef struct
 {
@@ -350,6 +357,9 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 
 		/* get object address that intorel_startup saved for us */
 		address = ((DR_intorel *) dest)->reladdr;
+
+		if (ExecCreateTableAs_post_hook != NULL)
+			ExecCreateTableAs_post_hook(pstate, query, address.objectId);
 
 		/* and clean up */
 		ExecutorFinish(queryDesc);

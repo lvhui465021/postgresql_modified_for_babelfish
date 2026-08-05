@@ -23,6 +23,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xlogprefetcher.h"
+#include "adapter/mysql/systemVar.h"
 #include "access/xlogrecovery.h"
 #include "commands/async.h"
 #include "miscadmin.h"
@@ -150,6 +151,8 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, InjectionPointShmemSize());
 	size = add_size(size, SlotSyncShmemSize());
 	size = add_size(size, AioShmemSize());
+	size = add_size(size, GlobalSystemVariablesShmemSize());
+	size = add_size(size, MysTimeZoneShmemSize());
 
 	/* include additional requested shmem from preload libraries */
 	size = add_size(size, total_addin_request);
@@ -345,6 +348,8 @@ CreateOrAttachShmemStructs(void)
 	WaitEventCustomShmemInit();
 	InjectionPointShmemInit();
 	AioShmemInit();
+	GlobalSystemVariablesShmemInit();
+	MysTimeZoneShmemInit();
 }
 
 /*
