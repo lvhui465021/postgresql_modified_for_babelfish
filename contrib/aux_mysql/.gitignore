@@ -1,0 +1,8 @@
+# Generated subdirectories
+/log/
+/results/
+/tmp_check/
+
+# PG18 MySQL CLI harness output
+actual/
+mysql_compat_actual_*/

@@ -1,0 +1,270 @@
+# mysql-compat full transcript
+--------------
+SELECT 'extension_installed' AS test_name,
+       COUNT(*) = 1 AND COALESCE(MAX(extversion), 'missing') <> 'missing' AS passed
+FROM pg_extension WHERE extname = 'aux_mysql'
+--------------
+
+test_name	passed
+extension_installed	1
+1 row in set
+
+--------------
+SELECT 'protocol_listener_on' AS test_name,
+       current_setting('mysql_listener_on') = 'on'
+       AND current_setting('mysql_port') IS NOT NULL
+       AND current_setting('mysql_max_allowed_packet') IS NOT NULL
+       AS passed
+--------------
+
+test_name	passed
+protocol_listener_on	1
+1 row in set
+
+--------------
+SELECT 'packet_and_charset_variables' AS test_name,
+       @@max_allowed_packet > 0 AND @@character_set_client = 'utf8mb4'
+       AND @@collation_connection = 'utf8mb4_general_ci' AS passed
+--------------
+
+test_name	passed
+packet_and_charset_variables	1
+1 row in set
+
+--------------
+DROP DATABASE IF EXISTS mysql_compat_session
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_session
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SHOW DATABASES
+--------------
+
+database
+information_schema
+mys_sys
+mysql
+mysql_compat_session
+performance_schema
+sys
+unvdb_mysqldb
+7 rows in set
+
+--------------
+SELECT 'database' AS test_name, DATABASE() = 'mysql_compat_session' AS passed
+--------------
+
+test_name	passed
+database	1
+1 row in set
+
+--------------
+SELECT 'schema_database_alias' AS test_name, SCHEMA() = DATABASE() AS passed
+--------------
+
+test_name	passed
+schema_database_alias	1
+1 row in set
+
+--------------
+SELECT 'session_identity' AS test_name,
+       USER() IS NOT NULL AND CURRENT_USER() IS NOT NULL
+       AND SESSION_USER() IS NOT NULL AS passed
+--------------
+
+test_name	passed
+session_identity	1
+1 row in set
+
+--------------
+SELECT 'version' AS test_name, mysql.version() IS NOT NULL AS passed
+--------------
+
+test_name	passed
+version	1
+1 row in set
+
+--------------
+SELECT 'boolean_display' AS test_name, true = 1 AND false = 0 AS passed
+--------------
+
+test_name	passed
+boolean_display	1
+1 row in set
+
+--------------
+SELECT 'null_safe_equal' AS test_name,
+       1 <=> 1 AND NULL <=> NULL AND NOT (1 <=> NULL) AS passed
+--------------
+
+test_name	passed
+null_safe_equal	1
+1 row in set
+
+--------------
+SET @mysql_compat_number := 42, @mysql_compat_text := 'session value'
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'user_variables' AS test_name,
+       @mysql_compat_number = 42 AND @mysql_compat_text = 'session value' AS passed
+--------------
+
+test_name	passed
+user_variables	1
+1 row in set
+
+--------------
+SELECT @mysql_compat_number := @mysql_compat_number + 1
+--------------
+
+@mysql_compat_number
+43
+1 row in set
+
+--------------
+SELECT 'user_variable_expression' AS test_name,
+       @mysql_compat_number = 43 AS passed
+--------------
+
+test_name	passed
+user_variable_expression	1
+1 row in set
+
+--------------
+SET sql_mode = DEFAULT
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'system_variable_bare' AS test_name, @@sql_mode IS NOT NULL AS passed
+--------------
+
+test_name	passed
+system_variable_bare	1
+1 row in set
+
+--------------
+SET SESSION sql_mode = @@session.sql_mode
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'system_variable_session' AS test_name,
+       @@session.sql_mode = @@sql_mode AS passed
+--------------
+
+test_name	passed
+system_variable_session	1
+1 row in set
+
+--------------
+SELECT 'system_variable_global' AS test_name,
+       @@global.sql_mode IS NOT NULL AS passed
+--------------
+
+test_name	passed
+system_variable_global	1
+1 row in set
+
+--------------
+SET NAMES utf8mb4
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'set_names' AS test_name, @@character_set_client IS NOT NULL AS passed
+--------------
+
+test_name	passed
+set_names	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_session_tx (id INT PRIMARY KEY)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+BEGIN
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_session_tx VALUES (1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+ROLLBACK
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'transaction_rollback' AS test_name,
+       COUNT(*) = 0 AS passed FROM mysql_session_tx
+--------------
+
+test_name	passed
+transaction_rollback	1
+1 row in set
+
+--------------
+BEGIN
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_session_tx VALUES (2)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+COMMIT
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'transaction_commit' AS test_name,
+       COUNT(*) = 1 AS passed FROM mysql_session_tx WHERE id = 2
+--------------
+
+test_name	passed
+transaction_commit	1
+1 row in set
+
+--------------
+DROP DATABASE mysql_compat_session
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'database_cleanup' AS test_name,
+       COUNT(*) = 0 AS passed FROM pg_database WHERE datname = 'mysql_compat_session'
+--------------
+
+test_name	passed
+database_cleanup	1
+1 row in set
+
+Bye

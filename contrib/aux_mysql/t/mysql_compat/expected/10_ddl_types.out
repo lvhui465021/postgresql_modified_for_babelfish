@@ -1,0 +1,443 @@
+# mysql-compat full transcript
+--------------
+DROP DATABASE IF EXISTS mysql_compat_ddl
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_ddl
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_ddl_types (
+  id INT UNSIGNED ZEROFILL AUTO_INCREMENT PRIMARY KEY,
+  tiny_signed TINYINT,
+  tiny_unsigned TINYINT UNSIGNED,
+  small_unsigned SMALLINT UNSIGNED,
+  medium_signed MEDIUMINT,
+  medium_unsigned MEDIUMINT UNSIGNED,
+  int_unsigned INT UNSIGNED,
+  big_unsigned BIGINT UNSIGNED,
+  year_value YEAR,
+  bool_value BOOL,
+  boolean_value BOOLEAN,
+  bit_value BIT(4),
+  real_value REAL,
+  double_value DOUBLE,
+  decimal_value DECIMAL(10,2),
+  char_value CHAR(8),
+  dt DATETIME,
+  date_value DATE,
+  time_value TIME,
+  bin_value BINARY(4),
+  varbin_value VARBINARY(8),
+  blob_value BLOB,
+  tinyblob_value TINYBLOB,
+  mediumblob_value MEDIUMBLOB,
+  longblob_value LONGBLOB,
+  tinytext_value TINYTEXT,
+  text_value TEXT,
+  mediumtext_value MEDIUMTEXT,
+  longtext_value LONGTEXT,
+  enum_value ENUM('red', 'green', 'blue'),
+  set_value SET('read', 'write', 'admin'),
+  name VARCHAR(32) COMMENT 'column comment',
+  touched TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY mysql_ddl_types_name_key (name),
+  KEY mysql_ddl_types_date_key (date_value),
+  FULLTEXT KEY mysql_ddl_types_text_key (text_value)
+) ENGINE=InnoDB AUTO_INCREMENT=100 COMMENT='table comment'
+  ROW_FORMAT=DYNAMIC STATS_AUTO_RECALC=1
+  STATS_PERSISTENT=1 STATS_SAMPLE_PAGES=1
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_types
+  (tiny_signed, tiny_unsigned, small_unsigned, medium_signed, medium_unsigned, int_unsigned,
+   big_unsigned, year_value, bool_value, boolean_value, bit_value, real_value, double_value,
+   decimal_value, char_value, dt, date_value, time_value, bin_value,
+   varbin_value, blob_value, tinyblob_value, mediumblob_value, longblob_value,
+   tinytext_value, text_value, mediumtext_value, longtext_value, enum_value,
+   set_value, name)
+VALUES
+  (-128, 255, 65535, -8388608, 16777215, 4294967295, 1, 2024, true, true,
+   B'1010', 1.5, 2.5, 1234.56, 'char', '2024-02-03 04:05:06',
+   '2024-02-03', '04:05:06', 'AB', 'CD', 'blob', 'tinyblob', 'mediumblob',
+   'longblob', 'tinytext', 'text', 'mediumtext', 'longtext', 'green',
+   'read,write', 'types')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'mysql_integer_aliases' AS test_name,
+       id = 100 AND tiny_signed = -128 AND tiny_unsigned = 255
+       AND small_unsigned = 65535
+       AND medium_signed = -8388608 AND medium_unsigned = 16777215
+       AND int_unsigned = 4294967295 AND big_unsigned = 1 AS passed
+FROM mysql_ddl_types WHERE name = 'types'
+--------------
+
+test_name	passed
+mysql_integer_aliases	1
+1 row in set
+
+--------------
+SELECT 'datetime_binary_blob_year' AS test_name,
+       dt = '2024-02-03 04:05:06' AND year_value = 2024
+       AND bool_value = 1 AND boolean_value = 1 AND bit_value = B'1010'
+       AND real_value = 1.5 AND double_value = 2.5
+       AND decimal_value = 1234.56
+       AND char_value = 'char' AND date_value = '2024-02-03'
+       AND time_value = '04:05:06'
+       AND blob_value = 'blob' AND varbin_value = 'CD'
+       AND tinytext_value = 'tinytext' AND text_value = 'text'
+       AND mediumtext_value = 'mediumtext' AND longtext_value = 'longtext'
+       AND enum_value = 'green' AND set_value = 'read,write' AS passed
+FROM mysql_ddl_types WHERE name = 'types'
+--------------
+
+test_name	passed
+datetime_binary_blob_year	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_ddl_side_path (
+  id INT PRIMARY KEY, payload VARCHAR(20)
+) ENGINE=InnoDB AVG_ROW_LENGTH=1024 CHECKSUM=1 COMPRESSION='zlib'
+  CONNECTION='side' DELAY_KEY_WRITE=1 ENCRYPTION='N' KEY_BLOCK_SIZE=8
+  MAX_ROWS=10 MIN_ROWS=1 PACK_KEYS=1 PASSWORD='x'
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_side_path VALUES (1, 'side')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'storage_table_options_ignored' AS test_name,
+       payload = 'side' AS passed FROM mysql_ddl_side_path WHERE id = 1
+--------------
+
+test_name	passed
+storage_table_options_ignored	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_ddl_json (id INT PRIMARY KEY, json_value JSON)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_json VALUES (1, JSON_OBJECT('key', 1))
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'json_column_type' AS test_name,
+       mysql.json_unquote(json_value->'key') = '1' AS passed
+FROM mysql_ddl_json WHERE id = 1
+--------------
+
+test_name	passed
+json_column_type	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_ddl_zero_length (varchar_zero VARCHAR(0), char_zero CHAR(0))
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_zero_length VALUES ('', ''), (NULL, NULL)
+--------------
+
+Query OK, 2 rows affected
+
+--------------
+SELECT 'zero_length_char_varchar' AS test_name,
+       (SELECT COUNT(*) = 1 FROM mysql_ddl_zero_length
+        WHERE varchar_zero = '' AND char_zero = '')
+       AND (SELECT COUNT(*) = 2
+            FROM information_schema.columns
+            WHERE table_schema = 'mysql_compat_ddl'
+              AND table_name = 'mysql_ddl_zero_length'
+              AND ((column_name = 'varchar_zero' AND column_type = 'varchar(0)')
+                   OR (column_name = 'char_zero' AND column_type = 'char(0)'))) AS passed
+--------------
+
+test_name	passed
+zero_length_char_varchar	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_ddl_partitioned (id INT, value_int INT)
+PARTITION BY RANGE (id)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_ddl_partition_0 PARTITION OF mysql_ddl_partitioned
+FOR VALUES FROM (0) TO (10)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_partitioned VALUES (1, 10)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'partition_of' AS test_name,
+       (SELECT COUNT(*) = 1 FROM mysql_ddl_partition_0
+        WHERE id = 1 AND value_int = 10) AS passed
+--------------
+
+test_name	passed
+partition_of	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_ddl_trigger_source (id INT PRIMARY KEY, value_int INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_ddl_trigger_audit (id INT PRIMARY KEY, value_int INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TRIGGER mysql_ddl_after_insert AFTER INSERT ON mysql_ddl_trigger_source
+FOR EACH ROW INSERT INTO mysql_ddl_trigger_audit(id, value_int)
+VALUES (NEW.id, NEW.value_int)
+--------------
+
+Query OK, 0 rows affected
+
+Query OK, 0 rows affected
+
+--------------
+SELECT p.proname, p.prosrc
+FROM pg_proc p
+WHERE p.proname LIKE '__mysql_trigger%'
+--------------
+
+proname	prosrc
+__mysql_trigger_mysql_ddl_trigger_source_mysql_ddl_after_insert	BEGIN
+INSERT INTO mysql_ddl_trigger_audit(id, value_int)
+VALUES (NEW.id, NEW.value_int);
+RETURN NEW;
+END
+1 row in set
+
+--------------
+INSERT INTO mysql_ddl_trigger_source VALUES (1, 10)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'simple_trigger' AS test_name,
+       (SELECT COUNT(*) = 1 FROM mysql_ddl_trigger_audit
+        WHERE id = 1 AND value_int = 10) AS passed
+--------------
+
+test_name	passed
+simple_trigger	1
+1 row in set
+
+--------------
+UPDATE mysql_ddl_types SET touched = '2000-01-01 00:00:00' WHERE name = 'types'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+UPDATE mysql_ddl_types SET name = 'types-updated' WHERE name = 'types'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'on_update_current_timestamp' AS test_name,
+       touched > '2000-01-01 00:00:00' AS passed
+FROM mysql_ddl_types WHERE name = 'types-updated'
+--------------
+
+test_name	passed
+on_update_current_timestamp	1
+1 row in set
+
+--------------
+ALTER TABLE mysql_ddl_types ALGORITHM=INPLACE
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+ALTER TABLE mysql_ddl_types COMMENT='altered table comment' ALGORITHM=INPLACE
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+ALTER TABLE mysql_ddl_types ADD COLUMN alter_value INT DEFAULT 7
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+ALTER TABLE mysql_ddl_types MODIFY COLUMN alter_value BIGINT DEFAULT 7
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+ALTER TABLE mysql_ddl_types CHANGE COLUMN alter_value altered_value BIGINT DEFAULT 7
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'alter_add_modify_change' AS test_name, altered_value = 7 AS passed
+FROM mysql_ddl_types WHERE name = 'types-updated'
+--------------
+
+test_name	passed
+alter_add_modify_change	1
+1 row in set
+
+--------------
+CREATE INDEX mysql_ddl_types_name_index ON mysql_ddl_types (name)
+  COMMENT 'ignored index comment' LOCK=NONE INVISIBLE
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE FULLTEXT INDEX mysql_ddl_types_fulltext ON mysql_ddl_types (name)
+  COMMENT 'ignored fulltext modifier'
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE SPATIAL INDEX mysql_ddl_types_spatial ON mysql_ddl_types (name)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SHOW INDEX FROM mysql_ddl_types
+--------------
+
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment
+mysql_ddl_types	0	PRIMARY	1	id	A	0	NULL	NULL		btree		
+mysql_ddl_types	0	mysql_ddl_types_name_key	1	name	A	0	NULL	NULL	YES	btree		
+mysql_ddl_types	1	mysql_ddl_types_date_key	1	date_value	A	0	NULL	NULL	YES	btree		
+mysql_ddl_types	1	mysql_ddl_types_text_key	1	text_value	A	0	NULL	NULL	YES	btree		
+mysql_ddl_types	1	mysql_ddl_types_name_index	1	name	A	0	NULL	NULL	YES	btree		
+mysql_ddl_types	1	mysql_ddl_types_fulltext	1	name	A	0	NULL	NULL	YES	btree		
+mysql_ddl_types	1	mysql_ddl_types_spatial	1	name	A	0	NULL	NULL	YES	btree		
+7 rows in set
+
+--------------
+CREATE TABLE mysql_ddl_parent (id INT PRIMARY KEY)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_ddl_child_cascade (
+  id INT PRIMARY KEY, parent_id INT NOT NULL,
+  CONSTRAINT mysql_ddl_child_cascade_fk FOREIGN KEY (parent_id)
+    REFERENCES mysql_ddl_parent(id) ON UPDATE CASCADE ON DELETE CASCADE
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_ddl_child_null (
+  id INT PRIMARY KEY, parent_id INT NULL,
+  CONSTRAINT mysql_ddl_child_null_fk FOREIGN KEY (parent_id)
+    REFERENCES mysql_ddl_parent(id) ON UPDATE SET NULL ON DELETE SET NULL
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_ddl_parent VALUES (1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_ddl_child_cascade VALUES (1, 1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_ddl_child_null VALUES (1, 1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+UPDATE mysql_ddl_parent SET id = 2 WHERE id = 1
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'foreign_key_update_actions' AS test_name,
+       (SELECT parent_id = 2 FROM mysql_ddl_child_cascade WHERE id = 1)
+       AND (SELECT parent_id IS NULL FROM mysql_ddl_child_null WHERE id = 1) AS passed
+--------------
+
+test_name	passed
+foreign_key_update_actions	1
+1 row in set
+
+--------------
+DELETE FROM mysql_ddl_parent WHERE id = 2
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'foreign_key_delete_actions' AS test_name,
+       (SELECT COUNT(*) = 0 FROM mysql_ddl_child_cascade)
+       AND (SELECT parent_id IS NULL FROM mysql_ddl_child_null WHERE id = 1) AS passed
+--------------
+
+test_name	passed
+foreign_key_delete_actions	1
+1 row in set
+
+--------------
+DROP DATABASE mysql_compat_ddl
+--------------
+
+Query OK, 0 rows affected
+
+Bye

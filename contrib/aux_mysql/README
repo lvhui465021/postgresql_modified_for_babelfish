@@ -1,0 +1,9 @@
+aux_mysql supplies OpenHalo MySQL compatibility objects for PostgreSQL 18.
+
+The extension installs at version 1.1 and supports the OpenHalo upgrade chain
+through 1.6.  PG18-only build and regression-test files are kept alongside the
+OpenHalo-compatible extension payload.
+
+The MySQL compatibility tree is built through Meson.  The autoconf/Make build
+does not recurse into the MySQL compatibility sources; use the Meson build and
+tests described by the repository architecture document.

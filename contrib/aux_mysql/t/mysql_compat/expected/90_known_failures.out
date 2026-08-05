@@ -1,0 +1,81 @@
+# mysql-compat full transcript
+--------------
+CREATE TEMPORARY TABLE mysql_known_api_name(function_name VARCHAR(64))
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_known_api_name VALUES ('version')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'catalog_name_collation' AS test_name, COUNT(*) = 1 AS passed
+FROM mysql_known_api_name r JOIN pg_proc p ON p.proname = r.function_name
+--------------
+
+ERROR 1105 (HY000) at line 3: could not determine which collation to use for string hashing
+--------------
+DROP TEMPORARY TABLE mysql_known_api_name
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+DROP DATABASE IF EXISTS mysql_compat_known_metadata
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_known_metadata
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_known_indexed (id INT PRIMARY KEY, value_int INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_known_update_a(id INT PRIMARY KEY, value_int INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_known_update_b(id INT PRIMARY KEY, value_int INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_known_update_a VALUES (1, 10)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_known_update_b VALUES (1, 20)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+UPDATE mysql_known_update_a AS a, mysql_known_update_b AS b
+SET a.value_int = 11, b.value_int = 21
+WHERE a.id = b.id
+--------------
+
+ERROR 1064 (42000) at line 14: syntax error, multi table name or alias in set.
+--------------
+DROP DATABASE mysql_compat_known_metadata
+--------------
+
+Query OK, 0 rows affected
+
+Bye

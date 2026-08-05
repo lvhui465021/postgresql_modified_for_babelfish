@@ -1,0 +1,329 @@
+# mysql-compat full transcript
+--------------
+DROP DATABASE IF EXISTS mysql_compat_dml
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_dml
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_dml_target (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(20) UNIQUE,
+  value_int INT NOT NULL DEFAULT 0,
+  note VARCHAR(40) DEFAULT ''
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT LOW_PRIORITY INTO mysql_dml_target (code, value_int, note)
+  VALUES ('a', 1, 'initial'), ('b', 2, 'initial'), ('c', 2, 'initial')
+--------------
+
+Query OK, 3 rows affected
+
+--------------
+INSERT HIGH_PRIORITY INTO mysql_dml_target (code, value_int, note)
+  VALUES ('high', 5, 'high priority')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT DELAYED INTO mysql_dml_target (code, value_int, note)
+  VALUES ('delayed', 6, 'delayed')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_dml_target SET code = 'set', value_int = 4, note = 'insert set'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_dml_target (code, value_int, note) VALUES ('a', 10, 'duplicate')
+  ON DUPLICATE KEY UPDATE value_int = VALUES(value_int), note = VALUES(note)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT IGNORE INTO mysql_dml_target (code, value_int, note) VALUES ('a', 99, 'ignored')
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT IGNORE INTO mysql_dml_target (code, value_int, note)
+  VALUES ('a', 999, 'ignored duplicate'), ('ignore-new', 7, 'inserted by ignore')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+REPLACE INTO mysql_dml_target (id, code, value_int, note)
+  VALUES (2, 'b', 20, 'replaced')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+REPLACE LOW_PRIORITY INTO mysql_dml_target (id, code, value_int, note)
+  VALUES (3, 'c', 30, 'replace low priority')
+--------------
+
+Query OK, 1 row affected
+
+--------------
+REPLACE INTO mysql_dml_target SET id = 4, code = 'high', value_int = 40,
+  note = 'replace set'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'insert_replace_conflict' AS test_name,
+       (SELECT value_int = 10 AND note = 'duplicate' FROM mysql_dml_target WHERE code = 'a')
+       AND (SELECT value_int = 20 AND note = 'replaced' FROM mysql_dml_target WHERE code = 'b')
+       AND (SELECT value_int = 30 FROM mysql_dml_target WHERE code = 'c')
+       AND (SELECT value_int = 40 FROM mysql_dml_target WHERE code = 'high')
+       AND (SELECT COUNT(*) = 1 FROM mysql_dml_target WHERE code = 'ignore-new')
+       AND (SELECT COUNT(*) = 7 FROM mysql_dml_target) AS passed
+--------------
+
+test_name	passed
+insert_replace_conflict	1
+1 row in set
+
+--------------
+CREATE TABLE mysql_dml_source (id INT PRIMARY KEY, value_int INT, note VARCHAR(40))
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_dml_source VALUES (1, 100, 'one'), (2, 200, 'two')
+--------------
+
+Query OK, 2 rows affected
+
+--------------
+UPDATE mysql_dml_target AS t
+  INNER JOIN mysql_dml_source AS s ON t.id = s.id
+SET t.value_int = s.value_int, t.note = s.note
+--------------
+
+Query OK, 2 rows affected
+
+--------------
+SELECT 'single_target_update_join' AS test_name,
+       (SELECT value_int = 100 AND note = 'one' FROM mysql_dml_target WHERE id = 1)
+       AND (SELECT value_int = 200 AND note = 'two' FROM mysql_dml_target WHERE id = 2) AS passed
+--------------
+
+test_name	passed
+single_target_update_join	1
+1 row in set
+
+--------------
+UPDATE LOW_PRIORITY mysql_dml_target SET note = 'low priority' WHERE code = 'a'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'update_low_priority' AS test_name,
+       note = 'low priority' FROM mysql_dml_target WHERE code = 'a'
+--------------
+
+test_name	?column?
+update_low_priority	1
+1 row in set
+
+--------------
+SELECT value_int INTO @mysql_dml_selected
+FROM mysql_dml_target WHERE code = 'a'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'select_into_user_variable' AS test_name,
+       @mysql_dml_selected = 100 AS passed
+--------------
+
+test_name	passed
+select_into_user_variable	1
+1 row in set
+
+--------------
+SELECT 'distinctrow_limit_count' AS test_name,
+       (SELECT value_int FROM (
+        SELECT DISTINCTROW value_int FROM mysql_dml_target ORDER BY value_int LIMIT 1
+        ) AS distinct_count) = 4 AS passed
+--------------
+
+test_name	passed
+distinctrow_limit_count	1
+1 row in set
+
+--------------
+SELECT 'limit_offset_count' AS test_name,
+       (SELECT value_int FROM (
+          SELECT value_int FROM mysql_dml_target ORDER BY value_int LIMIT 1, 1
+        ) AS offset_count) = 6 AS passed
+--------------
+
+test_name	passed
+limit_offset_count	1
+1 row in set
+
+--------------
+SELECT 'limit_count_offset' AS test_name,
+       (SELECT group_concat(id ORDER BY id) FROM (
+          SELECT id FROM mysql_dml_target ORDER BY id LIMIT 2 OFFSET 1
+        ) AS limit_offset) = '2,3' AS passed
+--------------
+
+test_name	passed
+limit_count_offset	1
+1 row in set
+
+--------------
+SET @mysql_prepare_sql := 'SELECT COUNT(*) FROM mysql_dml_target'
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+PREPARE mysql_dml_stmt FROM @mysql_prepare_sql
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+EXECUTE mysql_dml_stmt
+--------------
+
+count
+7
+1 row in set
+
+--------------
+DEALLOCATE PREPARE mysql_dml_stmt
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+DELETE LOW_PRIORITY IGNORE FROM mysql_dml_target WHERE code = 'delayed'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'delete_options' AS test_name,
+       COUNT(*) = 0 AS passed FROM mysql_dml_target WHERE code = 'delayed'
+--------------
+
+test_name	passed
+delete_options	1
+1 row in set
+
+--------------
+SELECT 'operators_and_coercion' AS test_name,
+       ('12' + 3 = 15) AND ('12' * 2 = 24) AND ('12' DIV 5 = 2)
+       AND ('12' % 5 = 2) AND (5 & 3 = 1) AND (5 | 2 = 7)
+       AND (5 ^ 3 = 6) AND (8 >> 2 = 2) AND (1 << 3 = 8)
+       AND ('10' - 2 = 8) AND ('10' / 2 = 5)
+       AND ('10' = 10) AND ('2' < 10) AS passed
+--------------
+
+test_name	passed
+operators_and_coercion	1
+1 row in set
+
+--------------
+SET sql_mode = ''
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'numeric_prefix_conversion' AS test_name,
+       '12abc' + 0 = 12 AS passed
+--------------
+
+test_name	passed
+numeric_prefix_conversion	1
+1 row in set
+
+--------------
+SET sql_mode = DEFAULT
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'logical_operators' AS test_name,
+       (1 AND 2) = 1 AND (0 OR 2) = 1 AND (1 XOR 1) = 0 AS passed
+--------------
+
+test_name	passed
+logical_operators	1
+1 row in set
+
+--------------
+SELECT 'pattern_operators' AS test_name,
+       ('abc' LIKE 'a%') AND ('abc' REGEXP '^a')
+       AND NOT ('abc' NOT REGEXP '^a')
+       AND ('AbC' RLIKE '(?i)^abc$') AS passed
+--------------
+
+test_name	passed
+pattern_operators	1
+1 row in set
+
+--------------
+SELECT 'null_safe_equality' AS test_name,
+       (1 <=> 1) = 1 AND (NULL <=> NULL) = 1 AND (1 <=> NULL) = 0 AS passed
+--------------
+
+test_name	passed
+null_safe_equality	1
+1 row in set
+
+--------------
+SELECT 'boolean_literals' AS test_name,
+       true = 1 AND false = 0 AS passed
+--------------
+
+test_name	passed
+boolean_literals	1
+1 row in set
+
+--------------
+SELECT 'literal_like_case_insensitive' AS test_name,
+       'AbC' LIKE 'a%' AS passed
+--------------
+
+test_name	passed
+literal_like_case_insensitive	1
+1 row in set
+
+--------------
+DROP DATABASE mysql_compat_dml
+--------------
+
+Query OK, 0 rows affected
+
+Bye

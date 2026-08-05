@@ -1,0 +1,90 @@
+# mysql-compat full transcript
+--------------
+DROP DATABASE IF EXISTS mysql_compat_expected_errors
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_expected_errors
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_negative_values (
+  id INT PRIMARY KEY,
+  required_value INT NOT NULL,
+  unique_value VARCHAR(10) UNIQUE,
+  enum_value ENUM('a', 'b'),
+  positive_value INT CHECK (positive_value > 0),
+  tiny_unsigned TINYINT UNSIGNED
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_negative_values VALUES (1, 1, 'one', 'a', 1, 1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+INSERT INTO mysql_negative_values VALUES (1, 2, 'two', 'b', 2, 2)
+--------------
+
+ERROR 1062 (23000) at line 13: duplicate key value violates unique constraint "mysql_negative_values_pkey"
+--------------
+INSERT INTO mysql_negative_values VALUES (2, 2, 'one', 'b', 2, 2)
+--------------
+
+ERROR 1062 (23000) at line 14: duplicate key value violates unique constraint "mysql_negative_values_unique_value_key"
+--------------
+INSERT INTO mysql_negative_values VALUES (3, NULL, 'three', 'a', 3, 3)
+--------------
+
+ERROR 1048 (23000) at line 15: null value in column "required_value" of relation "mysql_negative_values" violates not-null constraint
+--------------
+INSERT INTO mysql_negative_values VALUES (4, 4, 'four', 'a', -1, 4)
+--------------
+
+ERROR 3819 (HY000) at line 16: new row for relation "mysql_negative_values" violates check constraint "mysql_negative_values_positive_value_check"
+--------------
+INSERT INTO mysql_negative_values VALUES (5, 5, 'five', 'not-in-enum', 5, 5)
+--------------
+
+ERROR 1265 (01000) at line 17: invalid value for MySQL ENUM
+--------------
+INSERT INTO mysql_negative_values VALUES (6, 6, 'six', 'a', 6, 256)
+--------------
+
+ERROR 3819 (HY000) at line 18: value for domain "tinyint unsigned" violates check constraint "tinyint unsigned_check"
+--------------
+SELECT DATE('2024-02-30')
+--------------
+
+ERROR 1292 (22007) at line 19: Incorrect datetime value: '2024-02-30'
+--------------
+SELECT DATE('0000-00-00')
+--------------
+
+ERROR 1292 (22007) at line 20: Incorrect datetime value: '0000-00-00'
+--------------
+SELECT TIMESTAMP('2024-13-01 00:00:00')
+--------------
+
+ERROR 1292 (22007) at line 21: Incorrect datetime value: '2024-13-01 00:00:00'
+--------------
+CREATE TABLE mysql_negative_values(id INT)
+--------------
+
+ERROR 1050 (42S01) at line 22: relation "mysql_negative_values" already exists
+ERROR 1049 (42000) at line 23: Unknown database 'mysql_compat_database_does_not_exist'
+--------------
+DROP DATABASE mysql_compat_expected_errors
+--------------
+
+Query OK, 0 rows affected
+
+Bye

@@ -1,0 +1,123 @@
+# mysql-compat full transcript
+--------------
+DROP DATABASE IF EXISTS mysql_compat_routines
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_routines
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_routine_log (
+  id INT PRIMARY KEY,
+  value_int INT NOT NULL
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE FUNCTION mysql_routine_add(a INT, b INT)
+RETURNS INT DETERMINISTIC
+RETURN a + b
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE PROCEDURE mysql_routine_add_log(IN p_id INT, IN p_value INT)
+MODIFIES SQL DATA
+BEGIN ATOMIC
+  INSERT INTO mysql_routine_log(id, value_int)
+  VALUES (p_id, p_value);
+END
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CALL mysql_routine_add_log(1, 42)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'stored_function_procedure_call' AS test_name,
+       mysql_routine_add(19, 23) = 42
+       AND (SELECT value_int = 42 FROM mysql_routine_log WHERE id = 1)
+       AS passed
+--------------
+
+test_name	passed
+stored_function_procedure_call	1
+1 row in set
+
+--------------
+CREATE OR REPLACE SQL SECURITY INVOKER VIEW mysql_routine_view AS
+SELECT id, value_int, mysql_routine_add(value_int, 1) AS calculated
+FROM mysql_routine_log
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'routine_in_view' AS test_name,
+       calculated = 43 AS passed FROM mysql_routine_view WHERE id = 1
+--------------
+
+test_name	passed
+routine_in_view	1
+1 row in set
+
+--------------
+SHOW CREATE FUNCTION mysql_routine_add
+--------------
+
+Function	sql_mode	Create Function	character_set_client	collation_connection	Database Collation
+mysql_routine_add	STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`test`@`%` FUNCTION `mysql_routine_add`(a integer, b integer) RETURNS integer
+	utf8mb4	utf8mb4_general_ci	utf8mb4_general_ci
+1 row in set
+
+--------------
+SHOW CREATE PROCEDURE mysql_routine_add_log
+--------------
+
+Procedure	sql_mode	Create Procedure	character_set_client	collation_connection	Database Collation
+mysql_routine_add_log	STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`test`@`%` PROCEDURE `mysql_routine_add_log`( IN p_id integer, IN p_value integer)
+	utf8mb4	utf8mb4_general_ci	utf8mb4_general_ci
+1 row in set
+
+--------------
+SHOW CREATE VIEW mysql_routine_view
+--------------
+
+View	Create View	character_set_client	collation_connection
+mysql_routine_view	CREATE ALGORITHM=UNDEFINED DEFINER=`test`@`%` SQL SECURITY DEFINER VIEW `mysql_routine_view` AS select `id``
+``value_int``
+``mysql_routine_add(value_int``1)``AS``calculated
+` from `mysql_routine_log`	utf8mb4	utf8mb4_general_ci
+1 row in set
+
+--------------
+SELECT 'routine_metadata' AS test_name,
+       COUNT(*) = 2 AS passed
+FROM mys_informa_schema.routines
+WHERE routine_schema = 'mysql_compat_routines'
+  AND routine_name IN ('mysql_routine_add', 'mysql_routine_add_log')
+--------------
+
+test_name	passed
+routine_metadata	1
+1 row in set
+
+--------------
+DROP DATABASE mysql_compat_routines
+--------------
+
+Query OK, 0 rows affected
+
+Bye

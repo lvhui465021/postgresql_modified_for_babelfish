@@ -1,0 +1,328 @@
+# mysql-compat full transcript
+--------------
+DROP DATABASE IF EXISTS mysql_compat_query_advanced
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE DATABASE mysql_compat_query_advanced
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_query_target (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(20) NOT NULL UNIQUE,
+  category VARCHAR(20) NOT NULL,
+  amount INT NOT NULL DEFAULT 0,
+  KEY mysql_query_amount_idx(amount)
+)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_query_source (id INT PRIMARY KEY, amount INT NOT NULL)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+CREATE TABLE mysql_query_archive (id INT, code VARCHAR(20), amount INT)
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_query_target(code, category, amount) VALUES
+  ('a', 'x', 10), ('b', 'x', 20), ('c', 'y', 30), ('d', 'y', 40)
+--------------
+
+Query OK, 4 rows affected
+
+--------------
+SELECT 'last_insert_id' AS test_name, LAST_INSERT_ID() = 1 AS passed
+--------------
+
+test_name	passed
+last_insert_id	1
+1 row in set
+
+--------------
+INSERT INTO mysql_query_source VALUES (1, 101), (2, 202)
+--------------
+
+Query OK, 2 rows affected
+
+--------------
+INSERT INTO mysql_query_archive
+SELECT id, code, amount FROM mysql_query_target WHERE category = 'x'
+--------------
+
+Query OK, 2 rows affected
+
+--------------
+SELECT 'insert_select' AS test_name,
+       COUNT(*) = 2 AND SUM(amount) = 30 AS passed FROM mysql_query_archive
+--------------
+
+test_name	passed
+insert_select	1
+1 row in set
+
+--------------
+SELECT 'join_query' AS test_name,
+       COUNT(*) = 2 AND SUM(s.amount) = 303 AS passed
+FROM mysql_query_target t JOIN mysql_query_source s ON s.id = t.id
+--------------
+
+test_name	passed
+join_query	1
+1 row in set
+
+--------------
+SELECT 'group_having' AS test_name,
+       COUNT(*) = 2 AS passed
+FROM (
+  SELECT category FROM mysql_query_target
+  GROUP BY category HAVING SUM(amount) > 0
+) AS grouped
+--------------
+
+test_name	passed
+group_having	1
+1 row in set
+
+--------------
+SELECT 'subquery_exists_in' AS test_name,
+       COUNT(*) = 2 AS passed
+FROM mysql_query_target t
+WHERE t.id IN (SELECT id FROM mysql_query_source)
+  AND EXISTS (SELECT 1 FROM mysql_query_source s WHERE s.id = t.id)
+--------------
+
+test_name	passed
+subquery_exists_in	1
+1 row in set
+
+--------------
+WITH mysql_query_cte AS (
+  SELECT category, SUM(amount) AS total_amount
+  FROM mysql_query_target GROUP BY category
+)
+SELECT 'cte' AS test_name,
+       COUNT(*) = 2 AND SUM(total_amount) = 100 AS passed
+FROM mysql_query_cte
+--------------
+
+test_name	passed
+cte	1
+1 row in set
+
+--------------
+SELECT 'union_all' AS test_name,
+       COUNT(*) = 2 AS passed
+FROM (
+  SELECT code FROM mysql_query_target WHERE id = 1
+  UNION ALL
+  SELECT code FROM mysql_query_target WHERE id = 2
+) AS union_rows
+--------------
+
+test_name	passed
+union_all	1
+1 row in set
+
+--------------
+SELECT SQL_NO_CACHE 'query_cache_and_force_index' AS test_name,
+       COUNT(*) = 1 AS passed
+FROM mysql_query_target FORCE INDEX(mysql_query_amount_idx)
+WHERE amount = 10
+--------------
+
+test_name	passed
+query_cache_and_force_index	1
+1 row in set
+
+--------------
+UPDATE mysql_query_target
+SET amount = amount + 100
+WHERE category = 'y'
+ORDER BY id LIMIT 1
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'row_count_after_update' AS test_name, ROW_COUNT() = 1 AS passed
+--------------
+
+test_name	passed
+row_count_after_update	1
+1 row in set
+
+--------------
+SELECT 'update_order_limit' AS test_name,
+       SUM(amount) = 170 AS passed
+FROM mysql_query_target WHERE category = 'y'
+--------------
+
+test_name	passed
+update_order_limit	1
+1 row in set
+
+--------------
+SET @mysql_query_sql = 'SELECT ? + ? AS prepared_sum'
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SET @mysql_query_arg1 = 19
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SET @mysql_query_arg2 = 23
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+PREPARE mysql_query_stmt FROM @mysql_query_sql
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+EXECUTE mysql_query_stmt
+USING @mysql_query_arg1, @mysql_query_arg2
+--------------
+
+prepared_sum
+42
+1 row in set
+
+--------------
+DEALLOCATE PREPARE mysql_query_stmt
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'prepared_execute_using' AS test_name,
+       @mysql_query_arg1 + @mysql_query_arg2 = 42 AS passed
+--------------
+
+test_name	passed
+prepared_execute_using	1
+1 row in set
+
+--------------
+START TRANSACTION
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+INSERT INTO mysql_query_target(code, category, amount) VALUES ('tx', 't', 1)
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SAVEPOINT mysql_query_savepoint
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+UPDATE mysql_query_target SET amount = 2 WHERE code = 'tx'
+--------------
+
+Query OK, 1 row affected
+
+--------------
+ROLLBACK TO SAVEPOINT mysql_query_savepoint
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+COMMIT
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'transaction_savepoint' AS test_name,
+       amount = 1 AS passed FROM mysql_query_target WHERE code = 'tx'
+--------------
+
+test_name	passed
+transaction_savepoint	1
+1 row in set
+
+--------------
+DELETE FROM mysql_query_target WHERE category = 'y' ORDER BY id LIMIT 1
+--------------
+
+Query OK, 1 row affected
+
+--------------
+SELECT 'delete_order_limit' AS test_name,
+       COUNT(*) = 1 AS passed FROM mysql_query_target WHERE category = 'y'
+--------------
+
+test_name	passed
+delete_order_limit	1
+1 row in set
+
+--------------
+SELECT SQL_CALC_FOUND_ROWS id
+FROM mysql_query_target ORDER BY id LIMIT 2
+--------------
+
+id
+1
+2
+2 rows in set
+
+--------------
+SELECT 'calc_found_rows' AS test_name, FOUND_ROWS() > 0 AS passed
+--------------
+
+test_name	passed
+calc_found_rows	1
+1 row in set
+
+--------------
+SET sql_mode = ''
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+SELECT 'nonstrict_empty_numeric' AS test_name, '' + 0 = 0 AS passed
+--------------
+
+test_name	passed
+nonstrict_empty_numeric	1
+1 row in set
+
+--------------
+SET sql_mode = DEFAULT
+--------------
+
+Query OK, 0 rows affected
+
+--------------
+DROP DATABASE mysql_compat_query_advanced
+--------------
+
+Query OK, 0 rows affected
+
+Bye
