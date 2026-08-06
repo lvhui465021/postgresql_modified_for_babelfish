@@ -17511,29 +17511,41 @@ create_mysql_ctas_on_update_triggers(ParseState *pstate, Query *query,
 }
 
 /*
+ * ExecCreateTableAs_post_hook is a single raw function pointer, not a
+ * registry: only one module's assignment survives.  Chain to whatever was
+ * registered before us (another compatibility module's CTAS post-hook)
+ * so that loading aux_mysql never silently disables a hook some other
+ * compatibility protocol already installed.
+ */
+static ExecCreateTableAs_post_hook_type prev_ctas_post_hook = NULL;
+
+/*
  * mys_ctas_post_hook
  *
  * ExecCreateTableAs_post_hook implementation.  Only MySQL-mode backends
  * need the ON UPDATE trigger inheritance; every other dialect falls
- * through.
+ * through to the previously registered hook (if any).
  */
 static void
 mys_ctas_post_hook(ParseState *pstate, Query *query, Oid target_relid)
 {
-	if (MyCompatMode != COMPAT_PROTOCOL_MYSQL)
-		return;
+	if (MyCompatMode == COMPAT_PROTOCOL_MYSQL)
+		create_mysql_ctas_on_update_triggers(pstate, query, target_relid);
 
-	create_mysql_ctas_on_update_triggers(pstate, query, target_relid);
+	if (prev_ctas_post_hook != NULL)
+		prev_ctas_post_hook(pstate, query, target_relid);
 }
 
 /*
  * InitMysCtasHook
  *
- * Register the CTAS post-hook.  Called during MySQL protocol
+ * Register the CTAS post-hook, chaining to any hook a previously loaded
+ * compatibility module already installed.  Called during MySQL protocol
  * initialization so that every forked backend inherits the hook.
  */
 void
 InitMysCtasHook(void)
 {
+	prev_ctas_post_hook = ExecCreateTableAs_post_hook;
 	ExecCreateTableAs_post_hook = mys_ctas_post_hook;
 }

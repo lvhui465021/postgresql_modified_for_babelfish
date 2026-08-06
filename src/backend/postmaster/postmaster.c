@@ -1931,7 +1931,17 @@ ServerLoop(void)
 	 					&& ListenSockets[listen_index] == events[i].fd);
 
 				if ((ListenConfig[listen_index]->fn_accept)(events[i].fd, &s) == STATUS_OK)
+				{
+					/*
+					 * ListenSocketProtocolKinds is kept in lockstep with
+					 * ListenSockets/ListenConfig by listen_add_socket(), so
+					 * the same listen_index that selects the accept/close
+					 * callbacks above also selects the compatibility
+					 * dialect for this connection.
+					 */
+					s.protocol_kind = ListenSocketProtocolKinds[listen_index];
 					BackendStartup(&s, ListenConfig[listen_index]);
+				}
 
 				/* We no longer need the open socket in this process */
 				if (s.sock != PGINVALID_SOCKET)

@@ -4606,8 +4606,9 @@ PostgresMain(const char *dbname, const char *username)
 	if (whereToSendOutput == DestRemote &&
 		PG_PROTOCOL_MAJOR(FrontendProtocol) >= 2)
 	{
-		if (MyProcPort && MyProcPort->protocol_config->fn_send_cancel_key)
-			MyProcPort->protocol_config->fn_send_cancel_key(MyProcPid, (char *)MyCancelKey, MyCancelKeyLength);
+		Assert(MyCancelKeyLength > 0);
+		ProtocolSendBackendKeyData((int) MyProcPid, MyCancelKey,
+									MyCancelKeyLength);
 	}
 
 	/* Welcome banner for standalone case */
@@ -4727,9 +4728,8 @@ PostgresMain(const char *dbname, const char *username)
 		/* Not reading from the client anymore. */
 		DoingCommandRead = false;
 
-		/* Make sure libpq is in a good state */
-		if (MyProcPort && MyProcPort->protocol_config->fn_comm_reset)
-			MyProcPort->protocol_config->fn_comm_reset();
+		/* Make sure the selected wire codec is in a good state. */
+		ProtocolCommReset();
 
 		/* Report the error to the client and/or server log */
 		EmitErrorReport();
@@ -4797,8 +4797,7 @@ PostgresMain(const char *dbname, const char *username)
 		 * messages from the client, so there isn't much we can do with the
 		 * connection anymore.
 		 */
-		if (MyProcPort && MyProcPort->protocol_config->fn_is_reading_msg &&
-			MyProcPort->protocol_config->fn_is_reading_msg())
+		if (ProtocolIsReadingMessage())
 			ereport(FATAL,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("terminating connection because protocol synchronization was lost")));
