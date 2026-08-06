@@ -35,6 +35,7 @@
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
 #include "parser/parser.h"
+#include "parser/parserapi.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "utils/fmgroids.h"
@@ -151,6 +152,17 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 
 	/* Guard against stack overflow due to overly complex expressions */
 	check_stack_depth();
+
+	/*
+	 * Compatibility parsers may introduce raw expression nodes that the core
+	 * grammar deliberately does not know about.  Keep this dispatch local to
+	 * the ParseState's explicitly selected parser routine: backend-local
+	 * protocol state is not a valid indication that nested SQL is MySQL.
+	 */
+	if (pstate->p_parser_routine != NULL &&
+		pstate->p_parser_routine->transform_expr_node != NULL &&
+		pstate->p_parser_routine->transform_expr_node(pstate, expr, &result))
+		return result;
 
 	switch (nodeTag(expr))
 	{

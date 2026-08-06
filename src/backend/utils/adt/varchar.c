@@ -20,6 +20,9 @@
 #include "catalog/pg_type.h"
 #include "common/hashfn.h"
 #include "libpq/pqformat.h"
+#include "libpq/libpq-be.h"
+#include "utils/adtext.h"
+#include "postmaster/protocol_routine.h"
 #include "mb/pg_wchar.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
@@ -58,10 +61,21 @@ anychar_typmodin(ArrayType *ta, const char *typename)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid type modifier")));
 
-	if (*tl < 1)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("length for type %s must be at least 1", typename)));
+	/*
+	 * MySQL protocol permits CHAR(0) and VARCHAR(0); standard PG mode
+	 * requires at least 1.
+	 */
+	{
+		int32		min_length;
+
+		min_length = adtext->allow_zero_length_char_typmod ? 0 : 1;
+
+		if (*tl < min_length)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("length for type %s must be at least %d",
+							typename, min_length)));
+	}
 	if (*tl > MaxAttrSize)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
