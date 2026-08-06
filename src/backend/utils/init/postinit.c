@@ -202,9 +202,16 @@ ProtocolAuthenticate(Port *port)
 {
 	const ProtocolRoutine *routine = port->protocol_routine;
 
-	Assert(routine != NULL);
-
-	if (routine->authenticate != NULL)
+	/*
+	 * routine may legitimately be NULL here: a protocol extension that
+	 * dispatches entirely through its own ProtocolExtensionConfig (e.g.
+	 * TDS's protocol_config->fn_authenticate) instead of registering a
+	 * ProtocolRoutine never calls AssignProtocolRoutine() -- that is only
+	 * invoked from pq_init(), which such an extension does not go through.
+	 * Its own fn_authenticate runs the real exchange and this function is
+	 * never reached for that connection at all. See protocol_routine.h.
+	 */
+	if (routine != NULL && routine->authenticate != NULL)
 	{
 		routine->authenticate(port);
 		return;

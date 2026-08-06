@@ -1732,6 +1732,30 @@ listen_add_socket(pgsocket fd, ProtocolExtensionConfig *protocol_config)
 }
 
 /*
+ * listen_add_protocol_socket -- listen_add_socket() plus a
+ * CompatibilityProtocolKind stamp, for protocol extensions (e.g. TDS) that
+ * open their own listener sockets and register a ProtocolExtensionConfig
+ * but never a ProtocolRoutine.  See the header comment in
+ * protocol_extension.h.
+ */
+void
+listen_add_protocol_socket(pgsocket fd, ProtocolExtensionConfig *protocol_config,
+							CompatibilityProtocolKind kind)
+{
+	int			idx = NumListenSockets;
+
+	if (!CompatibilityProtocolKindIsValid(kind))
+		ereport(FATAL,
+				(errmsg("invalid listener protocol kind %d", (int) kind)));
+
+	Assert(ListenSocketProtocolKinds != NULL);
+
+	listen_add_socket(fd, protocol_config);
+
+	ListenSocketProtocolKinds[idx] = kind;
+}
+
+/*
  * Check that pg_control exists in the correct location in the data directory.
  *
  * No attempt is made to validate the contents of pg_control here.  This is

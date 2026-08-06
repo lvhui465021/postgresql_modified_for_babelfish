@@ -28,6 +28,22 @@ extern PGDLLEXPORT int	listen_have_free_slot(void);
 extern PGDLLEXPORT void	listen_add_socket(pgsocket fd,
 								ProtocolExtensionConfig *protocol_config);
 
+/*
+ * listen_add_protocol_socket -- like listen_add_socket(), but also stamps
+ * the new socket's CompatibilityProtocolKind so that ServerLoop's accept
+ * dispatch (see postmaster.c) sets Port->protocol_kind correctly for
+ * connections accepted on it.
+ *
+ * Unlike ListenProtocolServerPort() (protocol_routine.h), this does NOT
+ * require a ProtocolRoutine to be registered for kind -- a protocol
+ * extension that dispatches entirely through its own ProtocolExtensionConfig
+ * (protocol_config), never through the kernel's ProtocolRoutine vtable, is a
+ * valid, intentional configuration.  See protocol_routine.h for details.
+ */
+extern PGDLLEXPORT void	listen_add_protocol_socket(pgsocket fd,
+								ProtocolExtensionConfig *protocol_config,
+								CompatibilityProtocolKind kind);
+
 extern int	libpq_accept(pgsocket server_fd, ClientSocket *client_sock);
 extern int	libpq_close(pgsocket server_fd);
 extern Port	*libpq_init(ClientSocket *client_sock);
