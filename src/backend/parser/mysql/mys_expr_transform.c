@@ -297,6 +297,19 @@ mys_transform_expr_node(ParseState *pstate, Node *expr, Node **result)
 					fn->funcname = list_make1(makeString("mys_json_object"));
 				else if (pg_strcasecmp(fname, "json_array") == 0)
 					fn->funcname = list_make1(makeString("json_build_array"));
+				/*
+				 * DATABASE()/SCHEMA() are MySQL synonyms for "the database
+				 * selected by the last USE".  UsedbStmt (mys_gram.y) maps
+				 * USE to `SET search_path = '<name>', "$user", public,
+				 * mysql, pg_catalog`, so the equivalent here is PostgreSQL's
+				 * own current_schema(): the first name in search_path that
+				 * resolves to a schema that actually exists -- exactly
+				 * DATABASE()'s "no database selected" -> NULL semantics too.
+				 */
+				else if (fn->args == NIL &&
+						 (pg_strcasecmp(fname, "database") == 0 ||
+						  pg_strcasecmp(fname, "schema") == 0))
+					fn->funcname = list_make1(makeString("current_schema"));
 			}
 
 			if (fn->args != NIL && fn->agg_order == NIL &&

@@ -518,16 +518,32 @@ ProcessUtility(PlannedStmt *pstmt,
 	 * We provide a function hook variable that lets loadable plugins get
 	 * control when ProcessUtility is called.  Such a plugin would normally
 	 * call standard_ProcessUtility().
+	 *
+	 * ProcessUtility_hook is a single global set once by whichever loadable
+	 * module installs it (Babelfish's T-SQL support), independent of which
+	 * dialect the *current* connection actually speaks.  When both a MySQL
+	 * listener (openHalo, dispatched via GetCurrentProtocolRoutine()) and a
+	 * T-SQL listener (Babelfish, dispatched via ProcessUtility_hook) are
+	 * loaded in the same cluster, a MySQL connection would otherwise run
+	 * every DDL statement through Babelfish's T-SQL-aware ProcessUtility_hook
+	 * instead of MySQL's, which doesn't recognize MySQL-specific parse nodes
+	 * (e.g. CONSTR_AUTOINC) -- so check for an explicitly-registered non-PG
+	 * ProtocolRoutine first, and only fall back to ProcessUtility_hook for
+	 * connections that don't have one (standard PG and, currently, T-SQL/TDS,
+	 * which doesn't register into this vtable and so resolves to the
+	 * COMPAT_PROTOCOL_POSTGRES StandardProtocolRoutine).
 	 */
-	if (ProcessUtility_hook)
-		(*ProcessUtility_hook) (pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
-	else
 	{
 		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
 
-		if (routine->process_utility != NULL)
+		if (routine->kind != COMPAT_PROTOCOL_POSTGRES && routine->process_utility != NULL)
+			routine->process_utility(pstmt, queryString, readOnlyTree,
+								 context, params, queryEnv, dest, qc);
+		else if (ProcessUtility_hook)
+			(*ProcessUtility_hook) (pstmt, queryString, readOnlyTree,
+									context, params, queryEnv,
+									dest, qc);
+		else if (routine->process_utility != NULL)
 			routine->process_utility(pstmt, queryString, readOnlyTree,
 								 context, params, queryEnv, dest, qc);
 		else
