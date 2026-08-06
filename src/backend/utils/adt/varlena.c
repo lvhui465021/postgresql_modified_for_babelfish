@@ -1244,10 +1244,10 @@ text_position(text *t1, text *t2, Oid collid)
 		pg_newlocale_from_collation(collid)->deterministic)
 		return 0;
 
-	if (adtext != NULL && adtext->strpos_non_deterministic != NULL &&
-		adtext->strpos_non_deterministic(t1, t2, collid, &result))
+	if (adtext != NULL && adtext->strpos_non_deterministic != NULL)
 	{
-		return result;
+		if (adtext->strpos_non_deterministic(t1, t2, collid, &result))
+			return result;
 	}
 	else if (pltsql_strpos_non_determinstic_hook && (*pltsql_strpos_non_determinstic_hook)(t1, t2, collid, &result))
 	{
@@ -4289,10 +4289,10 @@ replace_text(PG_FUNCTION_ARGS)
 		PG_RETURN_TEXT_P(src_text);
 	}
 
-	if (adtext != NULL && adtext->replace_non_deterministic != NULL &&
-		adtext->replace_non_deterministic(src_text, from_sub_text, to_sub_text, PG_GET_COLLATION(), &ret_text))
+	if (adtext != NULL && adtext->replace_non_deterministic != NULL)
 	{
-		PG_RETURN_TEXT_P(ret_text);
+		if (adtext->replace_non_deterministic(src_text, from_sub_text, to_sub_text, PG_GET_COLLATION(), &ret_text))
+			PG_RETURN_TEXT_P(ret_text);
 	}
 	else if (pltsql_replace_non_determinstic_hook && (*pltsql_replace_non_determinstic_hook)(src_text, from_sub_text, to_sub_text, PG_GET_COLLATION(), &ret_text))
 	{

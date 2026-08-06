@@ -141,11 +141,24 @@ typedef struct ADTExtMethod
 	 * A registrant MUST return/replicate the standard-PG answer for any
 	 * input it does not specifically own, or it silently changes behavior
 	 * for types/expressions unrelated to its own dialect.
+	 *
+	 * coalesce_typmod specifically: the legacy coalesce_typmod_hook is only
+	 * ever consulted by the kernel when cexpr->tsql_is_null is set (i.e. the
+	 * CoalesceExpr came from T-SQL's ISNULL(), not a plain COALESCE()) --
+	 * that extra condition lives at the kernel call site
+	 * (nodeFuncs.c:exprTypmod()), not in the hook itself. The vtable slot
+	 * has no such gate: the kernel calls it for every CoalesceExpr once
+	 * registered. Do NOT point this slot directly at an existing
+	 * coalesce_typmod_hook implementation that assumes the tsql_is_null
+	 * gate already happened -- it will then also apply ISNULL()'s
+	 * first-argument-typmod rule to ordinary COALESCE(), which is wrong. A
+	 * registrant that wants ISNULL-only behavior must check
+	 * cexpr->tsql_is_null itself.
 	 */
 
 	/* Typmod of an expression the standard rules can't type (exprTypmod_hook) */
 	expr_typmod_function					expr_typmod;
-	/* Typmod of a COALESCE whose arms disagree (coalesce_typmod_hook) */
+	/* Typmod of a COALESCE whose arms disagree (coalesce_typmod_hook); see tsql_is_null note above */
 	coalesce_typmod_function				coalesce_typmod;
 	/* Reject out-of-range precision/scale in a declared type (validate_var_datatype_scale_hook) */
 	validate_var_datatype_scale_function	validate_var_datatype_scale;

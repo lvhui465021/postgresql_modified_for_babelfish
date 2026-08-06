@@ -3036,12 +3036,14 @@ numeric_add_opt_error(Numeric num1, Numeric num2, bool *have_error)
 	init_var(&result);
 	add_var(&arg1, &arg2, &result);
 
-	if (adtext != NULL && adtext->detect_numeric_overflow != NULL &&
-		result.digits && result.ndigits > 0 &&
-		adtext->detect_numeric_overflow(result.weight, result.dscale, result.digits[0], DEC_DIGITS))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				errmsg("Arithmetic overflow error for data type numeric.")));
+	if (adtext != NULL && adtext->detect_numeric_overflow != NULL)
+	{
+		if (result.digits && result.ndigits > 0 &&
+			adtext->detect_numeric_overflow(result.weight, result.dscale, result.digits[0], DEC_DIGITS))
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					errmsg("Arithmetic overflow error for data type numeric.")));
+	}
 	else if (detect_numeric_overflow_hook && result.digits && result.ndigits > 0 &&
 	    (*detect_numeric_overflow_hook)(result.weight, result.dscale, result.digits[0], DEC_DIGITS))
 		ereport(ERROR,
@@ -6363,12 +6365,14 @@ numeric_avg(PG_FUNCTION_ARGS)
 	init_var(&sumX_var);
 	accum_sum_final(&state->sumX, &sumX_var);
 
-	if (adtext != NULL && adtext->detect_numeric_overflow != NULL &&
-		sumX_var.digits &&
-		adtext->detect_numeric_overflow(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				errmsg("Arithmetic overflow error for data type numeric.")));
+	if (adtext != NULL && adtext->detect_numeric_overflow != NULL)
+	{
+		if (sumX_var.digits &&
+			adtext->detect_numeric_overflow(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					errmsg("Arithmetic overflow error for data type numeric.")));
+	}
 	else if (detect_numeric_overflow_hook && sumX_var.digits &&
 	    (*detect_numeric_overflow_hook)(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
 		ereport(ERROR,
@@ -6408,12 +6412,14 @@ numeric_sum(PG_FUNCTION_ARGS)
 	init_var(&sumX_var);
 	accum_sum_final(&state->sumX, &sumX_var);
 
-	if (adtext != NULL && adtext->detect_numeric_overflow != NULL &&
-		sumX_var.digits &&
-		adtext->detect_numeric_overflow(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				errmsg("Arithmetic overflow error for data type numeric.")));
+	if (adtext != NULL && adtext->detect_numeric_overflow != NULL)
+	{
+		if (sumX_var.digits &&
+			adtext->detect_numeric_overflow(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					errmsg("Arithmetic overflow error for data type numeric.")));
+	}
 	else if (detect_numeric_overflow_hook && sumX_var.digits &&
 	    (*detect_numeric_overflow_hook)(sumX_var.weight, sumX_var.dscale, sumX_var.digits[0], DEC_DIGITS))
 		ereport(ERROR,
