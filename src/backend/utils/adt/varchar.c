@@ -68,7 +68,14 @@ anychar_typmodin(ArrayType *ta, const char *typename)
 	{
 		int32		min_length;
 
-		min_length = adtext->allow_zero_length_char_typmod ? 0 : 1;
+		/*
+		 * adtext is normally non-NULL by the time any typmod is parsed
+		 * (InitADTExt() runs unconditionally in postinit.c before a
+		 * backend can process a command), but anychar_typmodin() can run
+		 * during bootstrap/initdb before that point -- unlike numeric.c's
+		 * and date.c's adtext-consumers, this one was missing the guard.
+		 */
+		min_length = (adtext != NULL && adtext->allow_zero_length_char_typmod) ? 0 : 1;
 
 		if (*tl < min_length)
 			ereport(ERROR,
