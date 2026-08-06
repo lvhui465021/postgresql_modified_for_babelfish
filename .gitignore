@@ -46,3 +46,4 @@ lib*.pc
 /Release/
 /tmp_install/
 /portlock/
+CLAUDE.md
