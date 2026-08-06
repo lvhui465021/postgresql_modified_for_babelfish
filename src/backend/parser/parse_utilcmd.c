@@ -2854,7 +2854,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 				iparam->ordering = i->ordering;
 			}
 
-			if (adtext != NULL && adtext->unique_constraint_nulls_ordering != NULL)
+			if (sql_dialect == SQL_DIALECT_TSQL && adtext != NULL && adtext->unique_constraint_nulls_ordering != NULL)
 			{
 				iparam->nulls_ordering = adtext->unique_constraint_nulls_ordering(constraint->contype, iparam->ordering);
 			}

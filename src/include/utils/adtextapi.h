@@ -142,29 +142,47 @@ typedef struct ADTExtMethod
 	 * input it does not specifically own, or it silently changes behavior
 	 * for types/expressions unrelated to its own dialect.
 	 *
-	 * coalesce_typmod specifically: the legacy coalesce_typmod_hook is only
-	 * ever consulted by the kernel when cexpr->tsql_is_null is set (i.e. the
-	 * CoalesceExpr came from T-SQL's ISNULL(), not a plain COALESCE()) --
-	 * that extra condition lives at the kernel call site
-	 * (nodeFuncs.c:exprTypmod()), not in the hook itself. The vtable slot
-	 * has no such gate: the kernel calls it for every CoalesceExpr once
-	 * registered. Do NOT point this slot directly at an existing
-	 * coalesce_typmod_hook implementation that assumes the tsql_is_null
-	 * gate already happened -- it will then also apply ISNULL()'s
-	 * first-argument-typmod rule to ordinary COALESCE(), which is wrong. A
-	 * registrant that wants ISNULL-only behavior must check
-	 * cexpr->tsql_is_null itself.
+	 * coalesce_typmod specifically: neither the kernel's own
+	 * coalesce_typmod_hook_impl-style implementations nor this slot's
+	 * contract can tell "T-SQL ISNULL()" apart from a plain COALESCE() on
+	 * their own -- that distinction is cexpr->tsql_is_null, a field set
+	 * exclusively by the T-SQL grammar (never true for a MySQL- or
+	 * PG-parsed CoalesceExpr). The kernel call site
+	 * (nodeFuncs.c:exprTypmod(), T_CoalesceExpr) therefore gates *both* the
+	 * vtable slot and the legacy hook on cexpr->tsql_is_null, not just the
+	 * hook -- do not remove that gate from the vtable branch when adding a
+	 * new call site or a registrant will get "ISNULL()'s
+	 * first-argument-typmod rule applied to ordinary COALESCE()" for free.
 	 */
 
 	/* Typmod of an expression the standard rules can't type (exprTypmod_hook) */
 	expr_typmod_function					expr_typmod;
 	/* Typmod of a COALESCE whose arms disagree (coalesce_typmod_hook); see tsql_is_null note above */
 	coalesce_typmod_function				coalesce_typmod;
-	/* Reject out-of-range precision/scale in a declared type (validate_var_datatype_scale_hook) */
+	/*
+	 * Reject out-of-range precision/scale in a declared type
+	 * (validate_var_datatype_scale_hook). Neither the legacy Babelfish
+	 * implementation nor this slot has an internal dialect check; the
+	 * kernel call site (parse_type.c, typenameTypeMod()) gates both on
+	 * sql_dialect == SQL_DIALECT_TSQL. Do not drop that gate -- without it,
+	 * T-SQL's numeric(p,s) limits (p<=38) get applied to MySQL/PG DDL too.
+	 */
 	validate_var_datatype_scale_function	validate_var_datatype_scale;
 	/* Collation to stamp on an extern Param (handle_param_collation_hook) */
 	param_collation_function				param_collation;
-	/* Dialect default collation for a pg_type tuple (handle_default_collation_hook) */
+	/*
+	 * Dialect default collation for a pg_type tuple
+	 * (handle_default_collation_hook). Babelfish's own implementation is
+	 * only self-guarded when called with handle_pg_type=false
+	 * (parse_type.c's call site); the handle_pg_type=true call site
+	 * (lsyscache.c's get_typcollation(), used on every default-collation
+	 * type lookup) reaches an internal branch with no dialect check at all
+	 * -- it is safe today only because it bottoms out in
+	 * BABELFISH_CLUSTER_COLLATION_OID(), which self-guards two modules away
+	 * in babelfishpg_common. A future registrant should not assume
+	 * call-site safety here; verify the specific Babelfish implementation
+	 * you point this at self-guards on its own before relying on it.
+	 */
 	default_collation_function				default_collation;
 	/* position()/strpos() under a non-deterministic collation (pltsql_strpos_non_determinstic_hook) */
 	strpos_non_deterministic_function		strpos_non_deterministic;
@@ -180,7 +198,14 @@ typedef struct ADTExtMethod
 	sequence_datatype_function				sequence_datatype;
 	/* NULLS FIRST/LAST default for ORDER BY (sortby_nulls_hook) */
 	sortby_nulls_function					sortby_nulls;
-	/* NULLS ordering for a UNIQUE/PK index column (pltsql_unique_constraint_nulls_ordering_hook) */
+	/*
+	 * NULLS ordering for a UNIQUE/PK index column
+	 * (pltsql_unique_constraint_nulls_ordering_hook). The underlying
+	 * Babelfish implementation has no internal dialect check of its own; the
+	 * kernel call site (parse_utilcmd.c, transformIndexConstraint()) gates
+	 * *both* this slot and the legacy hook on sql_dialect ==
+	 * SQL_DIALECT_TSQL. Do not drop that gate from the vtable branch.
+	 */
 	unique_constraint_nulls_ordering_function unique_constraint_nulls_ordering;
 } ADTExtMethod;
 

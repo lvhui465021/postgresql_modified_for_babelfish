@@ -465,7 +465,7 @@ exprTypmod(const Node *expr)
 				int32		typmod;
 				ListCell   *arg;
 
-				if (adtext != NULL && adtext->coalesce_typmod != NULL)
+				if (adtext != NULL && adtext->coalesce_typmod != NULL && cexpr->tsql_is_null)
 					return adtext->coalesce_typmod(cexpr);
 				else if (coalesce_typmod_hook && cexpr->tsql_is_null)
 					return (*coalesce_typmod_hook)(cexpr);

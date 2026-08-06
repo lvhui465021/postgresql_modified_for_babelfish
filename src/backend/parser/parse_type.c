@@ -426,11 +426,24 @@ typenameTypeMod(ParseState *pstate, const TypeName *typeName, Type typ)
 	/*
 	 * Checks whether variable length datatypes like numeric, decimal, time, datetime2, datetimeoffset
 	 * are declared with permissible datalength at the time of table or stored procedure creation
+	 *
+	 * Gated on sql_dialect == SQL_DIALECT_TSQL (mirroring the same gate on
+	 * pltsql_unique_constraint_nulls_ordering_hook in parse_utilcmd.c):
+	 * unlike the other 12 legacy hooks converted to vtable-first dispatch
+	 * alongside this one, neither validate_var_datatype_scale_hook's
+	 * implementation nor this call site originally checked the dialect, so
+	 * it ran its T-SQL-specific precision/scale limits (e.g. numeric(p,s)
+	 * capped at p<=38) against every connection once babelfishpg_tsql was
+	 * loaded -- rejecting valid MySQL/PG DDL and casts with a SQL-Server
+	 * error message. See fix.md finding #3.
 	 */
-	if (adtext != NULL && adtext->validate_var_datatype_scale != NULL)
-		adtext->validate_var_datatype_scale(typeName, typ);
-	else if (validate_var_datatype_scale_hook)
-		(*validate_var_datatype_scale_hook)(typeName, typ);
+	if (sql_dialect == SQL_DIALECT_TSQL)
+	{
+		if (adtext != NULL && adtext->validate_var_datatype_scale != NULL)
+			adtext->validate_var_datatype_scale(typeName, typ);
+		else if (validate_var_datatype_scale_hook)
+			(*validate_var_datatype_scale_hook)(typeName, typ);
+	}
 
 	arrtypmod = construct_array_builtin(datums, n, CSTRINGOID);
 
