@@ -40,6 +40,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/protocol_routine.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
@@ -57,6 +58,8 @@
 #include "storage/sync.h"
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
+#include "parser/parsereng.h"
+#include "utils/adtext.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -72,6 +75,8 @@
 
 static HeapTuple GetDatabaseTuple(const char *dbname);
 static HeapTuple GetDatabaseTupleByOid(Oid dboid);
+static void ProtocolAuthenticate(Port *port);
+static void standard_ClientAuthentication(Port *port);
 static void CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections);
 static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
@@ -185,6 +190,45 @@ GetDatabaseTupleByOid(Oid dboid)
 
 
 /*
+ * ProtocolAuthenticate -- run the wire-specific portion of authentication
+ *
+ * PerformAuthentication() deliberately retains the PG18 timeout, timing,
+ * logging, and ClientAuthInProgress lifecycle around this small dispatch
+ * point.  Compatibility routines replace only the packet exchange and HBA
+ * method mapping, never that outer lifecycle.
+ */
+static void
+ProtocolAuthenticate(Port *port)
+{
+	const ProtocolRoutine *routine = port->protocol_routine;
+
+	Assert(routine != NULL);
+
+	if (routine->authenticate != NULL)
+	{
+		routine->authenticate(port);
+		return;
+	}
+
+	if (port->protocol_kind != COMPAT_PROTOCOL_POSTGRES)
+	{
+		ereport(FATAL,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("protocol kind %d has no authentication exchange",
+						(int) port->protocol_kind)));
+	}
+
+	standard_ClientAuthentication(port);
+}
+
+/* Standard fallback used by ProtocolAuthenticate(). */
+static void
+standard_ClientAuthentication(Port *port)
+{
+	ClientAuthentication(port);
+}
+
+/*
  * PerformAuthentication -- authenticate a remote client
  *
  * returns: nothing.  Will not return at all if there's any failure.
@@ -249,7 +293,7 @@ PerformAuthentication(Port *port)
 	 * Now perform authentication exchange.
 	 */
 	set_ps_display("authentication");
-	ClientAuthentication(port); /* might not return, if failure */
+	ProtocolAuthenticate(port); /* might not return, if failure */
 
 	/*
 	 * Done with authentication.  Disable the timeout, and log if needed.
@@ -1215,6 +1259,15 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 	/* Initialize this backend's session state. */
 	InitializeSession();
+
+	/* Resolve backend dialect (protocol override or cluster default) */
+	InitCompatMode();
+
+	/* Initialize Parser Engine (selects PG or MySQL parser per compat mode) */
+	InitParserEngine();
+
+	/* Initialize ADT Extension (selects PG or MySQL type hooks per compat mode) */
+	InitADTExt();
 
 	/*
 	 * If this is an interactive session, load any libraries that should be

@@ -27,6 +27,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/protocol_routine.h"
 #include "postmaster/protocol_extension.h"
 #include "replication/walsender.h"
 #include "storage/fd.h"
@@ -177,6 +178,16 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionCon
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 	port = MyProcPort = (protocol_config->fn_init)(client_sock);
 	port->protocol_config = protocol_config;
+
+	/*
+	 * A compatibility protocol layered on top of the standard socket/SSL
+	 * plumbing above (e.g. MySQL) adds its codec-specific state here.
+	 * port->protocol_routine was already resolved from port->protocol_kind
+	 * by AssignProtocolRoutine() inside pq_init().
+	 */
+	if (port->protocol_routine != NULL && port->protocol_routine->init != NULL)
+		port->protocol_routine->init(port);
+
 	MemoryContextSwitchTo(oldcontext);
 
 	whereToSendOutput = DestRemote; /* now safe to ereport to client */
@@ -286,15 +297,35 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionCon
 	RegisterTimeout(STARTUP_PACKET_TIMEOUT, StartupPacketTimeoutHandler);
 	enable_timeout_after(STARTUP_PACKET_TIMEOUT, AuthenticationTimeout * 1000);
 
-	/* Handle protocol-specific direct SSL handshake */
-	status = port->protocol_config->fn_direct_ssl_handshake(port);
+	/*
+	 * Handle protocol-specific direct SSL handshake.  Skipped for a
+	 * registered compatibility protocol that owns its whole startup
+	 * exchange (e.g. MySQL): this probe peeks a byte from the client to
+	 * detect a TLS ClientHello, but MySQL's wire protocol has the server
+	 * speak first, so the client has nothing queued yet and the peek
+	 * would block forever waiting for bytes that never arrive.
+	 */
+	if (port->protocol_routine != NULL &&
+		port->protocol_routine->startup_exchange != NULL)
+		status = STATUS_OK;
+	else
+		status = port->protocol_config->fn_direct_ssl_handshake(port);
 
 	/*
 	 * Receive the startup packet (which might turn out to be a cancel request
-	 * packet).
+	 * packet).  A registered compatibility protocol provides its own
+	 * exchange; falling through to the PostgreSQL startup parser would
+	 * consume its first packet with the wrong framing and make any later
+	 * error unrecoverable.
 	 */
 	if (status == STATUS_OK)
-		status = (port->protocol_config->fn_start)(port);
+	{
+		if (port->protocol_routine != NULL &&
+			port->protocol_routine->startup_exchange != NULL)
+			status = port->protocol_routine->startup_exchange(port);
+		else
+			status = (port->protocol_config->fn_start)(port);
+	}
 
 	/*
 	 * If we're going to reject the connection due to database state, say so

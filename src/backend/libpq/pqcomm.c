@@ -78,6 +78,7 @@
 #include "port/pg_bswap.h"
 #include "postmaster/protocol_extension.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/protocol_routine.h"
 #include "storage/ipc.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
@@ -189,6 +190,8 @@ pq_init(ClientSocket *client_sock)
 	port->sock = client_sock->sock;
 	memcpy(&port->raddr.addr, &client_sock->raddr.addr, client_sock->raddr.salen);
 	port->raddr.salen = client_sock->raddr.salen;
+	port->protocol_kind = client_sock->protocol_kind;
+	AssignProtocolRoutine(port);
 
 	/* fill in the server (local) address */
 	port->laddr.salen = sizeof(port->laddr.addr);
@@ -794,6 +797,10 @@ Setup_AF_UNIX(const char *sock_path)
 int
 AcceptConnection(pgsocket server_fd, ClientSocket *client_sock)
 {
+	/* The listener may overwrite this after accept succeeds. */
+	client_sock->sock = PGINVALID_SOCKET;
+	client_sock->protocol_kind = COMPAT_PROTOCOL_POSTGRES;
+
 	/* accept connection and fill in the client (remote) address */
 	client_sock->raddr.salen = sizeof(client_sock->raddr.addr);
 	if ((client_sock->sock = accept(server_fd,
