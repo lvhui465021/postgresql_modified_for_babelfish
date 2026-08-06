@@ -148,11 +148,12 @@ typedef struct ADTExtMethod
 	 * their own -- that distinction is cexpr->tsql_is_null, a field set
 	 * exclusively by the T-SQL grammar (never true for a MySQL- or
 	 * PG-parsed CoalesceExpr). The kernel call site
-	 * (nodeFuncs.c:exprTypmod(), T_CoalesceExpr) therefore gates *both* the
-	 * vtable slot and the legacy hook on cexpr->tsql_is_null, not just the
-	 * hook -- do not remove that gate from the vtable branch when adding a
-	 * new call site or a registrant will get "ISNULL()'s
-	 * first-argument-typmod rule applied to ordinary COALESCE()" for free.
+	 * (nodeFuncs.c:exprTypmod(), T_CoalesceExpr) gates only the *legacy
+	 * hook* fallback on cexpr->tsql_is_null; the vtable slot itself is NOT
+	 * gated on it. A vtable registrant is called for every CoalesceExpr in
+	 * its own dialect (not just ISNULL()-flagged ones) and is responsible
+	 * for returning the standard-PG answer when it doesn't want to special-
+	 * case a given node -- see the "cannot signal not mine" note above.
 	 */
 
 	/* Typmod of an expression the standard rules can't type (exprTypmod_hook) */
@@ -163,9 +164,16 @@ typedef struct ADTExtMethod
 	 * Reject out-of-range precision/scale in a declared type
 	 * (validate_var_datatype_scale_hook). Neither the legacy Babelfish
 	 * implementation nor this slot has an internal dialect check; the
-	 * kernel call site (parse_type.c, typenameTypeMod()) gates both on
-	 * sql_dialect == SQL_DIALECT_TSQL. Do not drop that gate -- without it,
-	 * T-SQL's numeric(p,s) limits (p<=38) get applied to MySQL/PG DDL too.
+	 * kernel call site (parse_type.c, typenameTypeMod()) gates only the
+	 * legacy hook fallback on sql_dialect == SQL_DIALECT_TSQL, so that
+	 * hook keeps applying T-SQL's numeric(p,s) limits (p<=38) only on
+	 * T-SQL connections. The vtable slot itself is NOT gated on
+	 * sql_dialect -- do not add that gate here. Dialect correctness for
+	 * this slot comes entirely from which ADTExtMethod is active
+	 * (MyCompatMode/RegisterADTExt); sql_dialect only distinguishes PG
+	 * from T-SQL (a MySQL connection is SQL_DIALECT_PG too), so gating the
+	 * slot on it would make a MySQL registrant's implementation
+	 * permanently unreachable.
 	 */
 	validate_var_datatype_scale_function	validate_var_datatype_scale;
 	/* Collation to stamp on an extern Param (handle_param_collation_hook) */
@@ -203,8 +211,12 @@ typedef struct ADTExtMethod
 	 * (pltsql_unique_constraint_nulls_ordering_hook). The underlying
 	 * Babelfish implementation has no internal dialect check of its own; the
 	 * kernel call site (parse_utilcmd.c, transformIndexConstraint()) gates
-	 * *both* this slot and the legacy hook on sql_dialect ==
-	 * SQL_DIALECT_TSQL. Do not drop that gate from the vtable branch.
+	 * only the legacy hook fallback on sql_dialect == SQL_DIALECT_TSQL. The
+	 * vtable slot itself must NOT be gated on sql_dialect -- dialect
+	 * correctness for the slot comes from which ADTExtMethod is active
+	 * (MyCompatMode/RegisterADTExt), and sql_dialect cannot distinguish a
+	 * MySQL connection from plain PG, so gating the slot on it would make
+	 * a MySQL registrant's implementation permanently unreachable.
 	 */
 	unique_constraint_nulls_ordering_function unique_constraint_nulls_ordering;
 } ADTExtMethod;
