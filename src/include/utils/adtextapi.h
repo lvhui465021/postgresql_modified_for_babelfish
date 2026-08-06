@@ -18,6 +18,8 @@
 #define ADTEXTAPI_H
 
 #include "fmgr.h"
+#include "nodes/plannodes.h"		/* Plan */
+#include "parser/parse_type.h"		/* Type, ParseState, parse/prim nodes */
 #include "utils/date.h"
 
 /*
@@ -33,6 +35,31 @@ typedef char *(*pre_timestamp_in_function)(char *str);
 typedef void (*post_timestamp_out_function)(void *ts, int style, char *buf);
 typedef Datum (*date_in_function)(PG_FUNCTION_ARGS);
 typedef Datum (*timestamp_in_function)(PG_FUNCTION_ARGS);
+
+/*
+ * Dialect type/collation/typmod dispatch callback types (W5). Each mirrors
+ * a Babelfish global hook of identical signature (babelfish_extensions/
+ * contrib/babelfishpg_tsql/src/{hooks.c,pl_handler.c}) so a single
+ * implementation can be assigned to either the global hook or the vtable
+ * slot with no cast. See adtextapi.h's struct-field comments below for
+ * what each one dispatches and known contract pitfalls (in particular
+ * default_collation and coalesce_typmod: neither callback can signal
+ * "I don't recognize this input", so a registrant must return/replicate
+ * the standard-PG answer for inputs it doesn't own).
+ */
+typedef int32 (*expr_typmod_function) (Plan *plan, Node *expr);
+typedef int32 (*coalesce_typmod_function) (const CoalesceExpr *cexpr);
+typedef void (*validate_var_datatype_scale_function) (const TypeName *typeName, Type typ);
+typedef Oid (*param_collation_function) (Param *param);
+typedef Oid (*default_collation_function) (Type typ, bool handle_pg_type);
+typedef bool (*strpos_non_deterministic_function) (text *t1, text *t2, Oid collid, int *result);
+typedef bool (*replace_non_deterministic_function) (text *t1, text *t2, text *t3, Oid collid, text **result);
+typedef Datum (*adjust_numeric_result_function) (Plan *plan, Node *expr, Datum result, bool result_isnull, Oid result_type, int32 result_typmod);
+typedef bool (*detect_numeric_overflow_function) (int weight, int dscale, int first_block, int numeric_base);
+typedef void (*identity_datatype_function) (ParseState *pstate, ColumnDef *column);
+typedef void (*sequence_datatype_function) (ParseState *pstate, Oid *newtypid, bool for_identity, DefElem *as_type, DefElem **max_value, DefElem **min_value);
+typedef void (*sortby_nulls_function) (SortGroupClause *sortcl, bool reverse);
+typedef SortByNulls (*unique_constraint_nulls_ordering_function) (ConstrType constraint_type, SortByDir ordering);
 
 /*
  * ABI guard.
@@ -70,7 +97,7 @@ typedef Datum (*timestamp_in_function)(PG_FUNCTION_ARGS);
  *      guard.
  */
 #define ADTEXT_METHOD_MAGIC    0x41445845u   /* "ADXE" */
-#define ADTEXT_METHOD_VERSION  1             /* bump on every field append */
+#define ADTEXT_METHOD_VERSION  2             /* bump on every field append */
 
 #define ADTEXT_METHOD_HEADER_INIT \
 	.magic = ADTEXT_METHOD_MAGIC, \
@@ -100,6 +127,48 @@ typedef struct ADTExtMethod
 	date_in_function			date_in;
 	timestamp_in_function		timestamp_in;
 	bool						allow_zero_length_char_typmod;
+
+	/*
+	 * Dialect type/collation/typmod dispatch (W5).  Each slot mirrors a
+	 * Babelfish global hook of identical signature; the kernel consults the
+	 * slot first and only falls back to the global hook when the slot is
+	 * NULL, so a MySQL connection never runs T-SQL type semantics merely
+	 * because babelfishpg_tsql happens to be loaded in the same cluster.
+	 *
+	 * default_collation and coalesce_typmod cannot signal "not mine": the
+	 * callback's return value unconditionally replaces the kernel's own
+	 * answer (there is no out-parameter or sentinel meaning "I decline").
+	 * A registrant MUST return/replicate the standard-PG answer for any
+	 * input it does not specifically own, or it silently changes behavior
+	 * for types/expressions unrelated to its own dialect.
+	 */
+
+	/* Typmod of an expression the standard rules can't type (exprTypmod_hook) */
+	expr_typmod_function					expr_typmod;
+	/* Typmod of a COALESCE whose arms disagree (coalesce_typmod_hook) */
+	coalesce_typmod_function				coalesce_typmod;
+	/* Reject out-of-range precision/scale in a declared type (validate_var_datatype_scale_hook) */
+	validate_var_datatype_scale_function	validate_var_datatype_scale;
+	/* Collation to stamp on an extern Param (handle_param_collation_hook) */
+	param_collation_function				param_collation;
+	/* Dialect default collation for a pg_type tuple (handle_default_collation_hook) */
+	default_collation_function				default_collation;
+	/* position()/strpos() under a non-deterministic collation (pltsql_strpos_non_determinstic_hook) */
+	strpos_non_deterministic_function		strpos_non_deterministic;
+	/* replace() under a non-deterministic collation (pltsql_replace_non_determinstic_hook) */
+	replace_non_deterministic_function		replace_non_deterministic;
+	/* Re-round/re-scale a numeric result to dialect rules (adjust_numeric_result_hook) */
+	adjust_numeric_result_function			adjust_numeric_result;
+	/* Dialect numeric overflow test on an unpacked NumericVar (detect_numeric_overflow_hook) */
+	detect_numeric_overflow_function		detect_numeric_overflow;
+	/* Validate/adjust the type of an IDENTITY column (pltsql_identity_datatype_hook) */
+	identity_datatype_function				identity_datatype;
+	/* Resolve CREATE SEQUENCE ... AS <type> and its min/max (pltsql_sequence_datatype_hook) */
+	sequence_datatype_function				sequence_datatype;
+	/* NULLS FIRST/LAST default for ORDER BY (sortby_nulls_hook) */
+	sortby_nulls_function					sortby_nulls;
+	/* NULLS ordering for a UNIQUE/PK index column (pltsql_unique_constraint_nulls_ordering_hook) */
+	unique_constraint_nulls_ordering_function unique_constraint_nulls_ordering;
 } ADTExtMethod;
 
 #endif							/* ADTEXTAPI_H */

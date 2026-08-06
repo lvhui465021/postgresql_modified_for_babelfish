@@ -44,7 +44,20 @@ static const ADTExtMethod standard_adtext = {
 	.post_timestamp_out = NULL,
 	.date_in = NULL,
 	.timestamp_in = NULL,
-	.allow_zero_length_char_typmod = false
+	.allow_zero_length_char_typmod = false,
+	.expr_typmod = NULL,
+	.coalesce_typmod = NULL,
+	.validate_var_datatype_scale = NULL,
+	.param_collation = NULL,
+	.default_collation = NULL,
+	.strpos_non_deterministic = NULL,
+	.replace_non_deterministic = NULL,
+	.adjust_numeric_result = NULL,
+	.detect_numeric_overflow = NULL,
+	.identity_datatype = NULL,
+	.sequence_datatype = NULL,
+	.sortby_nulls = NULL,
+	.unique_constraint_nulls_ordering = NULL
 };
 
 const ADTExtMethod *
