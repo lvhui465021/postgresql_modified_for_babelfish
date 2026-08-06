@@ -43,6 +43,7 @@
 #include "nodes/makefuncs.h"
 #include "parser/parser.h"
 #include "parser/parse_type.h"
+#include "utils/adtext.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -3235,7 +3236,11 @@ get_typcollation(Oid typid)
 
 		result = typtup->typcollation;
 
-		if (handle_default_collation_hook)
+		if (adtext != NULL && adtext->default_collation != NULL)
+		{
+			result = adtext->default_collation((Type) tp, true);
+		}
+		else if (handle_default_collation_hook)
 		{
 			result = (*handle_default_collation_hook)((Type) tp, true);
 		}

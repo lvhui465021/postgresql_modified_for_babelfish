@@ -41,6 +41,7 @@
 #include "parser/parse_type.h"
 #include "parser/parser.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/lsyscache.h"
@@ -3532,7 +3533,11 @@ addTargetToSortList(ParseState *pstate, TargetEntry *tle,
 			case SORTBY_NULLS_DEFAULT:
 				/* NULLS FIRST is default for DESC; other way for ASC */
 				sortcl->nulls_first = reverse;
-				if (sortby_nulls_hook)
+				if (adtext != NULL && adtext->sortby_nulls != NULL)
+				{
+					adtext->sortby_nulls(sortcl, reverse);
+				}
+				else if (sortby_nulls_hook)
 				{
 					sortby_nulls_hook(sortcl, reverse);
 				}

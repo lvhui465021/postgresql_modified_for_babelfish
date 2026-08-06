@@ -43,6 +43,7 @@
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "utils/acl.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/resowner.h"
@@ -1394,7 +1395,14 @@ init_params(ParseState *pstate, List *options, bool for_identity,
 
 		Oid			newtypid = 0;
 
-		if (pltsql_sequence_datatype_hook)
+		if (adtext != NULL && adtext->sequence_datatype != NULL)
+			adtext->sequence_datatype(pstate,
+									  &newtypid,
+									  for_identity,
+									  as_type,
+									  &max_value,
+									  &min_value);
+		else if (pltsql_sequence_datatype_hook)
 			(* pltsql_sequence_datatype_hook) (pstate,
 											   &newtypid,
 											   for_identity,

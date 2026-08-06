@@ -60,6 +60,7 @@
 #include "parser/parser.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/acl.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
@@ -869,7 +870,9 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 											 true, false,
 											 NULL, NULL);
 
-					if (pltsql_identity_datatype_hook)
+					if (adtext != NULL && adtext->identity_datatype != NULL)
+						adtext->identity_datatype(cxt->pstate, column);
+					else if (pltsql_identity_datatype_hook)
 						(* pltsql_identity_datatype_hook) (cxt->pstate, column);
 
 					column->identity = constraint->generated_when;
@@ -2851,7 +2854,11 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 				iparam->ordering = i->ordering;
 			}
 
-			if (sql_dialect == SQL_DIALECT_TSQL && pltsql_unique_constraint_nulls_ordering_hook)
+			if (adtext != NULL && adtext->unique_constraint_nulls_ordering != NULL)
+			{
+				iparam->nulls_ordering = adtext->unique_constraint_nulls_ordering(constraint->contype, iparam->ordering);
+			}
+			else if (sql_dialect == SQL_DIALECT_TSQL && pltsql_unique_constraint_nulls_ordering_hook)
 			{
 				iparam->nulls_ordering = (* pltsql_unique_constraint_nulls_ordering_hook) (constraint->contype, iparam->ordering);
 			}

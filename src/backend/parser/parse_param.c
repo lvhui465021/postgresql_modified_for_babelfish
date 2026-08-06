@@ -29,6 +29,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_param.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -118,7 +119,11 @@ fixed_paramref_hook(ParseState *pstate, ParamRef *pref)
 	param->paramid = paramno;
 	param->paramtype = parstate->paramTypes[paramno - 1];
 	param->paramtypmod = -1;
-	if (handle_param_collation_hook)
+	if (adtext != NULL && adtext->param_collation != NULL)
+	{
+		param->paramcollid = adtext->param_collation(param);
+	}
+	else if (handle_param_collation_hook)
 	{
 		param->paramcollid = handle_param_collation_hook(param);
 	}

@@ -66,6 +66,7 @@
 #include "nodes/miscnodes.h"
 #include "nodes/nodeFuncs.h"
 #include "pgstat.h"
+#include "utils/adtext.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
@@ -930,12 +931,22 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			*op->resvalue = d;
 			*op->resnull = fcinfo->isnull;
 
-			if (adjust_numeric_result_hook && fcinfo->flinfo != NULL)
+			if (fcinfo->flinfo != NULL)
 			{
-				if (state->parent != NULL)
-					*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
-				else
-					*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				if (adtext != NULL && adtext->adjust_numeric_result != NULL)
+				{
+					if (state->parent != NULL)
+						*op->resvalue = adtext->adjust_numeric_result(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					else
+						*op->resvalue = adtext->adjust_numeric_result(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				}
+				else if (adjust_numeric_result_hook)
+				{
+					if (state->parent != NULL)
+						*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					else
+						*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				}
 			}
 
 			EEO_NEXT();
@@ -965,14 +976,24 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			*op->resvalue = d;
 			*op->resnull = fcinfo->isnull;
 
-			if (adjust_numeric_result_hook && fcinfo->flinfo != NULL)
+			if (fcinfo->flinfo != NULL)
 			{
-				if (state->parent != NULL)
-					*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
-				else
-					*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				if (adtext != NULL && adtext->adjust_numeric_result != NULL)
+				{
+					if (state->parent != NULL)
+						*op->resvalue = adtext->adjust_numeric_result(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					else
+						*op->resvalue = adtext->adjust_numeric_result(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				}
+				else if (adjust_numeric_result_hook)
+				{
+					if (state->parent != NULL)
+						*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					else
+						*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+				}
 			}
-				
+
 
 	strictfail:
 			EEO_NEXT();
@@ -998,12 +1019,22 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 				*op->resvalue = d;
 				*op->resnull = fcinfo->isnull;
 
-				if (adjust_numeric_result_hook && fcinfo->flinfo != NULL)
+				if (fcinfo->flinfo != NULL)
 	 			{
-	 				if (state->parent != NULL)
-	 					*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
-	 				else
-	 					*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					if (adtext != NULL && adtext->adjust_numeric_result != NULL)
+					{
+						if (state->parent != NULL)
+							*op->resvalue = adtext->adjust_numeric_result(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+						else
+							*op->resvalue = adtext->adjust_numeric_result(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					}
+					else if (adjust_numeric_result_hook)
+					{
+						if (state->parent != NULL)
+							*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+						else
+							*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					}
 	 			}
 			}
 
@@ -1030,12 +1061,22 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 				*op->resvalue = d;
 				*op->resnull = fcinfo->isnull;
 
-				if (adjust_numeric_result_hook && fcinfo->flinfo != NULL)
+				if (fcinfo->flinfo != NULL)
 	 			{
-	 				if (state->parent != NULL)
-	 					*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
-	 				else
-	 					*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					if (adtext != NULL && adtext->adjust_numeric_result != NULL)
+					{
+						if (state->parent != NULL)
+							*op->resvalue = adtext->adjust_numeric_result(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+						else
+							*op->resvalue = adtext->adjust_numeric_result(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					}
+					else if (adjust_numeric_result_hook)
+					{
+						if (state->parent != NULL)
+							*op->resvalue = adjust_numeric_result_hook(state->parent->plan, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+						else
+							*op->resvalue = adjust_numeric_result_hook(NULL, fcinfo->flinfo->fn_expr, d, *op->resnull, InvalidOid, -1);
+					}
 	 			}
 			}
 

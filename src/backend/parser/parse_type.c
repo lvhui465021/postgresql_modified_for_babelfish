@@ -22,6 +22,7 @@
 #include "nodes/makefuncs.h"
 #include "parser/parse_type.h"
 #include "parser/parser.h"
+#include "utils/adtext.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -426,8 +427,10 @@ typenameTypeMod(ParseState *pstate, const TypeName *typeName, Type typ)
 	 * Checks whether variable length datatypes like numeric, decimal, time, datetime2, datetimeoffset
 	 * are declared with permissible datalength at the time of table or stored procedure creation
 	 */
-	if (validate_var_datatype_scale_hook)
-			(*validate_var_datatype_scale_hook)(typeName, typ);
+	if (adtext != NULL && adtext->validate_var_datatype_scale != NULL)
+		adtext->validate_var_datatype_scale(typeName, typ);
+	else if (validate_var_datatype_scale_hook)
+		(*validate_var_datatype_scale_hook)(typeName, typ);
 
 	arrtypmod = construct_array_builtin(datums, n, CSTRINGOID);
 
@@ -661,7 +664,11 @@ typeTypeCollation(Type typ)
 
 	typtup = (Form_pg_type) GETSTRUCT(typ);
 
-	if (handle_default_collation_hook)
+	if (adtext != NULL && adtext->default_collation != NULL)
+	{
+		return adtext->default_collation(typ, false);
+	}
+	else if (handle_default_collation_hook)
 	{
 		return (*handle_default_collation_hook)(typ, false);
 	}

@@ -48,6 +48,7 @@
 #include "rewrite/rewriteManip.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
@@ -2642,7 +2643,9 @@ eval_const_expressions_mutator(Node *node,
 				 */
 				set_opfuncid(expr);
 
-				if (exprTypmod_hook)
+				if (adtext != NULL && adtext->expr_typmod != NULL)
+					result_typmod = adtext->expr_typmod(NULL, node);
+				else if (exprTypmod_hook)
 					result_typmod = exprTypmod_hook(NULL, node);
 
 				/*
@@ -2750,7 +2753,9 @@ eval_const_expressions_mutator(Node *node,
 					set_opfuncid((OpExpr *) expr);	/* rely on struct
 													 * equivalence */
 
-					if (exprTypmod_hook)
+					if (adtext != NULL && adtext->expr_typmod != NULL)
+						result_typmod = adtext->expr_typmod(NULL, node);
+					else if (exprTypmod_hook)
 						result_typmod = exprTypmod_hook(NULL, node);
 
 					/*
@@ -3041,7 +3046,9 @@ eval_const_expressions_mutator(Node *node,
 												false,
 												true));
 
-					if (exprTypmod_hook)
+					if (adtext != NULL && adtext->expr_typmod != NULL)
+						result_typmod = adtext->expr_typmod(NULL, node);
+					else if (exprTypmod_hook)
 						result_typmod = exprTypmod_hook(NULL, node);
 
 					simple = simplify_function(infunc,
@@ -5144,7 +5151,9 @@ evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
 	/* Release all the junk we just created */
 	FreeExecutorState(estate);
 
-	if (adjust_numeric_result_hook)
+	if (adtext != NULL && adtext->adjust_numeric_result != NULL)
+		const_val = adtext->adjust_numeric_result(NULL, (Node *) expr, const_val, const_is_null, result_type, result_typmod);
+	else if (adjust_numeric_result_hook)
 		const_val = adjust_numeric_result_hook(NULL, (Node *) expr, const_val, const_is_null, result_type, result_typmod);
 
 	/*

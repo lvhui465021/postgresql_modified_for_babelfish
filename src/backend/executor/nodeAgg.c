@@ -265,6 +265,7 @@
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "utils/acl.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/dynahash.h"
@@ -1117,14 +1118,24 @@ finalize_aggregate(AggState *aggstate,
 
 			result = FunctionCallInvoke(fcinfo);
 			*resultIsNull = fcinfo->isnull;
-			if (adjust_numeric_result_hook)
+			if (adtext != NULL && adtext->adjust_numeric_result != NULL)
 			{
 				if (peragg->aggref != NULL)
-					result = adjust_numeric_result_hook(aggstate->ss.ps.plan, 
-														(Node *) peragg->aggref, 
-														result, 
-														*resultIsNull, 
-														peragg->aggref->aggtype, 
+					result = adtext->adjust_numeric_result(aggstate->ss.ps.plan,
+														(Node *) peragg->aggref,
+														result,
+														*resultIsNull,
+														peragg->aggref->aggtype,
+														-1);
+			}
+			else if (adjust_numeric_result_hook)
+			{
+				if (peragg->aggref != NULL)
+					result = adjust_numeric_result_hook(aggstate->ss.ps.plan,
+														(Node *) peragg->aggref,
+														result,
+														*resultIsNull,
+														peragg->aggref->aggtype,
 														-1);
 			}
 			*resultVal = MakeExpandedObjectReadOnly(result,

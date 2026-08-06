@@ -21,6 +21,7 @@
 #include "nodes/nodeFuncs.h"
 #include "parser/parser.h"
 #include "nodes/pathnodes.h"
+#include "utils/adtext.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
@@ -464,7 +465,9 @@ exprTypmod(const Node *expr)
 				int32		typmod;
 				ListCell   *arg;
 
-				if (coalesce_typmod_hook && cexpr->tsql_is_null)
+				if (adtext != NULL && adtext->coalesce_typmod != NULL)
+					return adtext->coalesce_typmod(cexpr);
+				else if (coalesce_typmod_hook && cexpr->tsql_is_null)
 					return (*coalesce_typmod_hook)(cexpr);
 
 				if (exprType((Node *) linitial(cexpr->args)) != coalescetype)
@@ -546,7 +549,9 @@ exprTypmod(const Node *expr)
 			break;
 	}
 
-	if (exprTypmod_hook)
+	if (adtext != NULL && adtext->expr_typmod != NULL)
+		return adtext->expr_typmod(NULL, (Node *) expr);
+	else if (exprTypmod_hook)
 		return exprTypmod_hook(NULL, (Node *) expr);
 
 	return -1;
