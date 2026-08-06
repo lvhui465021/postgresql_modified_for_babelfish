@@ -5537,7 +5537,31 @@ struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"database_compat_mode", PGC_POSTMASTER, COMPAT_OPTIONS_OTHER,
+		/*
+		 * Only the fallback for backends with no client connection
+		 * (autovacuum, background workers, logical replication apply)
+		 * reads this GUC -- InitCompatMode() derives MyCompatMode from
+		 * MyProcPort->protocol_kind for every real client connection
+		 * instead, and only reads database_compat_mode once, at backend
+		 * start, before any session code can run.
+		 *
+		 * That "read once at backend start" semantics is exactly what
+		 * session_preload_libraries has too, and PGC_SUSET (not
+		 * PGC_BACKEND/PGC_SU_BACKEND) is what it uses -- ALTER
+		 * DATABASE/ROLE ... SET only accepts PGC_USERSET/PGC_SUSET GUCs
+		 * (validate_option_array_item() in guc.c rejects anything stricter
+		 * with "cannot be set after connection start", since that pathway
+		 * has no way to distinguish "being loaded at backend start" from
+		 * "being changed interactively"). PGC_SUSET lets
+		 * ALTER DATABASE ... SET database_compat_mode = 'mysql' work
+		 * (applied via process_settings(), which InitPostgres() already
+		 * calls before InitCompatMode()); the accepted tradeoff, same as
+		 * session_preload_libraries, is that an interactive
+		 * SET database_compat_mode = ... mid-session is not rejected but
+		 * silently has no effect on the running backend, since
+		 * InitCompatMode() already ran.
+		 */
+		{"database_compat_mode", PGC_SUSET, COMPAT_OPTIONS_OTHER,
 			gettext_noop("Sets the database compatibility mode."),
 			NULL,
 			GUC_SUPERUSER_ONLY
