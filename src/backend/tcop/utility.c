@@ -63,6 +63,7 @@
 #include "rewrite/rewriteDefine.h"
 #include "storage/fd.h"
 #include "tcop/utility.h"
+#include "postmaster/protocol_routine.h"
 #include "utils/acl.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
@@ -523,9 +524,16 @@ ProcessUtility(PlannedStmt *pstmt,
 								context, params, queryEnv,
 								dest, qc);
 	else
-		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
+	{
+		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+		if (routine->process_utility != NULL)
+			routine->process_utility(pstmt, queryString, readOnlyTree,
+								 context, params, queryEnv, dest, qc);
+		else
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+									context, params, queryEnv, dest, qc);
+	}
 }
 
 /*

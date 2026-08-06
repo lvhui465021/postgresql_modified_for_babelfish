@@ -77,6 +77,7 @@
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/protocol_routine.h"
 #include "postmaster/syslogger.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -1735,7 +1736,23 @@ EmitErrorReport(void)
 	/* Send to client, if enabled */
 	if (edata->output_to_client)
 	{
-		if (MyProcPort)
+		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+		/*
+		 * Never fall through to PostgreSQL ErrorResponse/protocol_config
+		 * framing for a compatibility socket (MySQL, and eventually TDS
+		 * once it registers a ProtocolRoutine).  During error reporting it
+		 * is safer to close a broken compatibility session without a
+		 * client packet than to corrupt its protocol stream with a raw PG
+		 * 'E'/'N' message -- see the identical fix in guc.c's
+		 * ReportGUCOption for the ParameterStatus counterpart of this bug.
+		 */
+		if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+		{
+			if (routine->send_error != NULL)
+				routine->send_error(edata);
+		}
+		else if (MyProcPort)
 			MyProcPort->protocol_config->fn_send_message(edata);
 		else
 			send_message_to_frontend(edata);

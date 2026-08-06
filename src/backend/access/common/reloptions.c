@@ -517,6 +517,14 @@ static relopt_enum_elt_def viewCheckOptValues[] =
 	{(const char *) NULL}		/* list terminator */
 };
 
+/* MySQL protocol metadata provenance; not a PostgreSQL execution option. */
+static relopt_enum_elt_def mysqlDefaultKindOptValues[] =
+{
+	{"literal", MYSQL_DEFAULT_KIND_LITERAL},
+	{"expression", MYSQL_DEFAULT_KIND_EXPRESSION},
+	{(const char *) NULL}
+};
+
 static relopt_enum enumRelOpts[] =
 {
 	{
@@ -551,6 +559,17 @@ static relopt_enum enumRelOpts[] =
 		viewCheckOptValues,
 		VIEW_OPTION_CHECK_OPTION_NOT_SET,
 		gettext_noop("Valid values are \"local\" and \"cascaded\".")
+	},
+	{
+		{
+			"mysql_default_kind",
+			"Preserves MySQL default-record semantics for protocol metadata.",
+			RELOPT_KIND_ATTRIBUTE,
+			AccessExclusiveLock
+		},
+		mysqlDefaultKindOptValues,
+		MYSQL_DEFAULT_KIND_NONE,
+		gettext_noop("Valid values are \"literal\" and \"expression\".")
 	},
 	/* list terminator */
 	{{NULL}}
@@ -2131,7 +2150,8 @@ attribute_reloptions(Datum reloptions, bool validate)
 {
 	static const relopt_parse_elt tab[] = {
 		{"n_distinct", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct)},
-		{"n_distinct_inherited", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct_inherited)}
+		{"n_distinct_inherited", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct_inherited)},
+		{"mysql_default_kind", RELOPT_TYPE_ENUM, offsetof(AttributeOpts, mysql_default_kind)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,
