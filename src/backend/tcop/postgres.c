@@ -555,6 +555,24 @@ ProtocolProcessCommand(int *command, StringInfo inBuf)
 static void
 standard_CommReset(void)
 {
+	/*
+	 * Fusion regression fix: pre-fusion Babelfish called
+	 * protocol_config->fn_comm_reset() when set and did nothing otherwise
+	 * (a TDS connection's fn_comm_reset is NULL -- "not interested"; PG
+	 * connections' default_protocol_config always has fn_comm_reset =
+	 * libpq_comm_reset, so this is a no-op behavior change for them). The
+	 * refactor into this standalone function lost that check and always
+	 * ran pq_comm_reset(), silently applying PG's own comm-reset to a TDS
+	 * socket. pq_comm_reset() is only appropriate when there is no
+	 * protocol_config to consult at all (MyProcPort == NULL).
+	 */
+	if (MyProcPort)
+	{
+		if (MyProcPort->protocol_config->fn_comm_reset)
+			MyProcPort->protocol_config->fn_comm_reset();
+		return;
+	}
+
 	pq_comm_reset();
 }
 
@@ -581,6 +599,17 @@ ProtocolCommReset(void)
 static bool
 standard_IsReadingMessage(void)
 {
+	/*
+	 * See standard_CommReset()'s comment; same fusion regression. When
+	 * MyProcPort is set but its protocol has no fn_is_reading_msg (TDS),
+	 * report "not reading a message" rather than falling through to
+	 * pq_is_reading_msg(), which tracks libpq's own read state and has
+	 * nothing to do with a TDS connection's actual state.
+	 */
+	if (MyProcPort)
+		return MyProcPort->protocol_config->fn_is_reading_msg != NULL &&
+			MyProcPort->protocol_config->fn_is_reading_msg();
+
 	return pq_is_reading_msg();
 }
 
@@ -623,12 +652,28 @@ ProtocolSessionInitialize(Port *port)
 static void
 standard_SendBackendKeyData(int pid, const uint8 *key, int keylen)
 {
-	StringInfoData buf;
+	/*
+	 * See standard_CommReset()'s comment; same fusion regression. A TDS
+	 * connection's fn_send_cancel_key is NULL ("not interested" -- TDS has
+	 * its own cancel mechanism), matching pre-fusion Babelfish's behavior
+	 * of doing nothing in that case rather than writing a raw PG
+	 * BackendKeyData packet onto the socket.
+	 */
+	if (MyProcPort)
+	{
+		if (MyProcPort->protocol_config->fn_send_cancel_key)
+			MyProcPort->protocol_config->fn_send_cancel_key(pid, (char *) key, keylen);
+		return;
+	}
 
-	pq_beginmessage(&buf, PqMsg_BackendKeyData);
-	pq_sendint32(&buf, pid);
-	pq_sendbytes(&buf, key, keylen);
-	pq_endmessage(&buf);
+	{
+		StringInfoData buf;
+
+		pq_beginmessage(&buf, PqMsg_BackendKeyData);
+		pq_sendint32(&buf, pid);
+		pq_sendbytes(&buf, key, keylen);
+		pq_endmessage(&buf);
+	}
 }
 
 static void
