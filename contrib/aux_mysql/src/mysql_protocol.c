@@ -1237,6 +1237,23 @@ mysql_null_command(CommandDest dest)
         ok[pos++] = (char) (status >> 8);
         ok[pos++] = 0x00; ok[pos++] = 0x00;
         mysql_packet_write_ok(mysql_ps(), ok, (size_t) pos, 0x00);
+
+        /*
+         * Reset sequence numbers for the next command, mirroring
+         * mysql_end_command.  A comment-only or all-whitespace statement
+         * (non-empty query text that parses to zero raw statements) takes
+         * this path instead of mysql_end_command, and without this reset
+         * the next command's client packet arrives with seq=0 while the
+         * server still expects the previous command's continuation seq,
+         * producing "MySQL packet sequence number mismatch" and dropping
+         * the connection.
+         */
+		if (!mysql_simple_query_more_results)
+		{
+			mysql_packet_reset_seq(mysql_ps());
+			mysql_packet_set_server_seq(mysql_ps(), 1);
+			mysql_packet_set_result_started(mysql_ps(), false);
+		}
     }
     else
     {

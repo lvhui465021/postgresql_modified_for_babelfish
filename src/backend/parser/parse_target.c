@@ -28,6 +28,7 @@
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
 #include "parser/parsetree.h"
+#include "parser/parserapi.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -107,7 +108,11 @@ transformTargetEntry(ParseState *pstate,
 		 * Generate a suitable column name for a column without any explicit
 		 * 'AS ColumnName' clause.
 		 */
-		colname = FigureColname(node);
+		if (pstate->p_parser_routine != NULL &&
+			pstate->p_parser_routine->figure_colname != NULL)
+			colname = pstate->p_parser_routine->figure_colname(node);
+		if (colname == NULL)
+			colname = FigureColname(node);
 	}
 
 	return makeTargetEntry((Expr *) expr,

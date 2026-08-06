@@ -155,6 +155,10 @@ static bool ExecOnConflictUpdate(ModifyTableContext *context,
 								 TupleTableSlot *excludedSlot,
 								 bool canSetTag,
 								 TupleTableSlot **returning);
+static TM_Result ExecDeleteAct(ModifyTableContext *context,
+								   ResultRelInfo *resultRelInfo,
+								   ItemPointer tupleid,
+								   bool changingPart);
 static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 											   EState *estate,
 											   PartitionTupleRouting *proute,
@@ -1120,7 +1124,9 @@ ExecInsert(ModifyTableContext *context,
 			  resultRelInfo->ri_TrigDesc->trig_insert_before_row)))
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
-		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0)
+		if (onconflict != ONCONFLICT_NONE &&
+			onconflict != ONCONFLICT_REPLACE &&
+			resultRelInfo->ri_NumIndices > 0)
 		{
 			/* Perform a speculative insertion. */
 			uint32		specToken;
@@ -1244,6 +1250,27 @@ ExecInsert(ModifyTableContext *context,
 		}
 		else
 		{
+			/*
+			 * MySQL REPLACE removes every row that conflicts with the proposed
+			 * row before doing a normal insert.  Keep this compatibility action
+			 * outside PostgreSQL's speculative ON CONFLICT path: that path only
+			 * accepts DO NOTHING and DO UPDATE actions.
+			 */
+			if (onconflict == ONCONFLICT_REPLACE &&
+				resultRelInfo->ri_NumIndices > 0)
+			{
+				ItemPointerData conflictTid;
+				ItemPointerData invalidItemPtr;
+				List	   *arbiterIndexes;
+
+				ItemPointerSetInvalid(&invalidItemPtr);
+				arbiterIndexes = resultRelInfo->ri_onConflictArbiterIndexes;
+				while (!ExecCheckIndexConstraints(resultRelInfo, slot, estate,
+												  &conflictTid, &invalidItemPtr,
+												  arbiterIndexes))
+					ExecDeleteAct(context, resultRelInfo, &conflictTid, false);
+			}
+
 			/* insert the tuple normally */
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
