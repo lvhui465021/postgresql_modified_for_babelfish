@@ -18,6 +18,7 @@
 
 
 static const ADTExtMethod mys_adtext = {
+	ADTEXT_METHOD_HEADER_INIT,
 	.pre_numeric_in = NULL,
 	.post_numeric_out = NULL,
 	.pre_time_in = mys_pre_time_in,

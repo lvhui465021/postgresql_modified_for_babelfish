@@ -33,6 +33,7 @@ static const ADTExtMethod standard_adtext;
  * PostgreSQL implementations).
  */
 static const ADTExtMethod standard_adtext = {
+	ADTEXT_METHOD_HEADER_INIT,
 	.pre_numeric_in = NULL,
 	.post_numeric_out = NULL,
 	.pre_time_in = NULL,
@@ -67,6 +68,26 @@ void
 RegisterADTExt(CompatibilityProtocolKind kind, const ADTExtMethod *table)
 {
 	Assert(kind >= 0 && kind < COMPAT_PROTOCOL_KIND_MAX);
+
+	/*
+	 * See adtextapi.h's ABI guard comment: a registrant built against a
+	 * stale copy of this header (different field count/order) would
+	 * otherwise silently read/misinterpret memory past what it actually
+	 * initialized. Fail loudly at registration time instead.
+	 */
+	if (table->magic != ADTEXT_METHOD_MAGIC ||
+		table->struct_size != sizeof(ADTExtMethod))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("ADTExtMethod ABI mismatch for compatibility kind %d",
+						(int) kind),
+				 errdetail("Module supplied magic 0x%08X size %u version %u; "
+						   "kernel expects magic 0x%08X size %zu version %u.",
+						   table->magic, table->struct_size, table->version,
+						   ADTEXT_METHOD_MAGIC, sizeof(ADTExtMethod),
+						   ADTEXT_METHOD_VERSION),
+				 errhint("Rebuild the module against the installed PostgreSQL headers.")));
+
 	RegisterCompatibilityADTExt(kind, table);
 }
 
