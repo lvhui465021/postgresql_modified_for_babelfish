@@ -40,6 +40,7 @@
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
 #include "miscadmin.h"
+#include "postmaster/protocol_routine.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
 #include "storage/fd.h"
@@ -2668,7 +2669,23 @@ ReportGUCOption(struct config_generic *record)
 	if (record->last_reported == NULL ||
 		strcmp(val, record->last_reported) != 0)
 	{
-		if (MyProcPort && MyProcPort->protocol_config->fn_report_param_status)
+		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+		/*
+		 * ParameterStatus is PostgreSQL framing.  A compatibility routine
+		 * (MySQL, and eventually TDS once it registers a ProtocolRoutine)
+		 * must explicitly encode it or intentionally ignore it; it must
+		 * never leak a raw PG 'S' packet onto another protocol's socket.
+		 * Connections with no ProtocolRoutine registered for their kind
+		 * (plain PostgreSQL, and Babelfish's own protocol_config-based TDS
+		 * listener) keep using protocol_config, exactly as before.
+		 */
+		if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
+		{
+			if (routine->report_parameter_status != NULL)
+				routine->report_parameter_status(record->name, val);
+		}
+		else if (MyProcPort && MyProcPort->protocol_config->fn_report_param_status)
 			(MyProcPort->protocol_config->fn_report_param_status)(record->name, val);
 
 		/*
@@ -2681,6 +2698,25 @@ ReportGUCOption(struct config_generic *record)
 	}
 
 	pfree(val);
+}
+
+/*
+ * Standard PostgreSQL ParameterStatus encoder, callable from compat GUC
+ * paths that have their own ProtocolRoutine but want to fall back to plain
+ * PG framing (declared in guc.h; not currently called from this file, since
+ * Babelfish connections without a registered ProtocolRoutine already go
+ * through protocol_config above, but kept as the canonical "what plain PG
+ * does" implementation for other callers).
+ */
+void
+standard_ReportParameterStatus(const char *name, const char *value)
+{
+	StringInfoData msgbuf;
+
+	pq_beginmessage(&msgbuf, PqMsg_ParameterStatus);
+	pq_sendstring(&msgbuf, name);
+	pq_sendstring(&msgbuf, value);
+	pq_endmessage(&msgbuf);
 }
 
 /*
