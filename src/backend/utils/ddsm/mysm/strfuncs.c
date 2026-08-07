@@ -2019,6 +2019,29 @@ build_concat_foutcache(FunctionCallInfo fcinfo, int argidx)
 	return foutcache;
 }
 
+/*
+ * Is collid a real nondeterministic collation (e.g. mysql.case_insensitive,
+ * mysql.ignore_accents -- extension-owned ICU collations created by
+ * aux_mysql--1.1.sql and attached to string columns by DDL lowering), as
+ * opposed to caseInsensitiveId (== DEFAULT_COLLATION_OID, always
+ * deterministic, handled separately by ASCII-only folding below)?
+ *
+ * Mirrors the exact check text_position_setup() uses internally to decide
+ * whether to raise "nondeterministic collations are not supported for
+ * substring searches" -- kept in sync with it deliberately, so a caller can
+ * test up front whether that error is coming.
+ */
+static bool
+mys_collation_is_nondeterministic(Oid collid)
+{
+	pg_locale_t mylocale = 0;
+
+	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
+		mylocale = pg_newlocale_from_collation(collid);
+
+	return mylocale && !mylocale->deterministic;
+}
+
 static int
 text_position(text *t1, text *t2, Oid collid)
 {
@@ -2041,7 +2064,27 @@ text_position(text *t1, text *t2, Oid collid)
         lowered = lowerStrs(t1, t2, &backupBuf1, &backupBuf2);
         collid = 100;   /* 临时修改collid，绕过nondeterministic collations are not supported for substring searches错误*/
     }
-    else 
+    else if (mys_collation_is_nondeterministic(collid))
+    {
+        /*
+         * This is a pre-PG18 copy of text_position_setup()/text_position_
+         * next() below, predating the kernel's native ICU-based
+         * nondeterministic-collation substring search -- it only knows how
+         * to fold ASCII a-z/A-Z manually (the caseInsensitiveId branch
+         * above), and would otherwise hit text_position_setup()'s
+         * "nondeterministic collations are not supported" ereport(ERROR)
+         * for any other nondeterministic collation, e.g.
+         * mysql.case_insensitive. Delegate to the kernel's own strpos()
+         * (varlena.c:textpos -> text_position()) instead of reimplementing
+         * ICU-aware matching here: it already handles this collation
+         * correctly, and POSITION() on these same columns already relies
+         * on it.
+         */
+        return DatumGetInt32(DirectFunctionCall2Coll(textpos, collid,
+                                                       PointerGetDatum(t1),
+                                                       PointerGetDatum(t2)));
+    }
+    else
     {
         /* do nothing; */
     }
