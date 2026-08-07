@@ -411,14 +411,16 @@ invalid_pair:
 }
 
 /*
- * The exact raw-SQL marker the SHOW WARNINGS grammar action (mys_gram.y)
- * substitutes in.  Recognized below by content, not by a side-channel
- * flag, so that a multi-statement batch containing several SHOW WARNINGS
- * occurrences -- or one that isn't first in the batch -- is handled
- * correctly; see mysql_show_warnings_preserve_stmts (guc_tables.c) for why
- * a single boolean consumed at dispatch time is not enough.
+ * The exact raw-SQL markers the SHOW WARNINGS / SHOW COUNT(*) WARNINGS
+ * grammar actions (mys_gram.y) substitute in.  Recognized below by
+ * content, not by a side-channel flag, so that a multi-statement batch
+ * containing several such occurrences -- or one that isn't first in the
+ * batch -- is handled correctly; see mysql_show_warnings_preserve_stmts
+ * (guc_tables.c) for why a single boolean consumed at dispatch time is
+ * not enough.
  */
 #define MYSQL_SHOW_WARNINGS_QUERY "SELECT * FROM mysql.show_warnings()"
+#define MYSQL_SHOW_WARNINGS_COUNT_QUERY "SELECT pg_catalog.count(*) AS warning_count FROM mysql.show_warnings()"
 
 /*
  * mys_raw_parser  --  parse a MySQL SQL string.
@@ -500,7 +502,8 @@ mys_raw_parser(const char *str, RawParseMode mode)
 			char	   *sql = strVal(rawstmt->stmt);
 			List	   *reparsed = raw_parser(sql, RAW_PARSE_DEFAULT);
 
-			if (strcmp(sql, MYSQL_SHOW_WARNINGS_QUERY) == 0)
+			if (strcmp(sql, MYSQL_SHOW_WARNINGS_QUERY) == 0 ||
+				strcmp(sql, MYSQL_SHOW_WARNINGS_COUNT_QUERY) == 0)
 			{
 				ListCell   *rc;
 

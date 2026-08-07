@@ -2878,6 +2878,27 @@ DBTableInfoShowStmt:
 					$$ = (Node *) makeString(pstrdup(
 						"SELECT * FROM mysql.show_warnings()"));
 				}
+			| SHOW IDENT '(' '*' ')' WARNINGS
+				{
+					/*
+					 * SHOW COUNT(*) WARNINGS: the count-only variant of
+					 * SHOW WARNINGS, equivalent to SELECT @@warning_count.
+					 * COUNT is not a keyword in this grammar (it's an
+					 * ordinary function-name identifier everywhere else,
+					 * as in count(*)), so it's matched the same way
+					 * AdminNoopStmt matches "FLUSH TABLES"/"RESET QUERY
+					 * CACHE" above: accept any IDENT here and reject at
+					 * reduce time if it isn't literally "count".  Reuses
+					 * the same reparse-marker mechanism as plain SHOW
+					 * WARNINGS (see MYSQL_SHOW_WARNINGS_COUNT_QUERY in
+					 * mys_parser.c) so the retained diagnostics list is
+					 * read, not cleared, before this statement runs.
+					 */
+					if (pg_strcasecmp($2, "count") != 0)
+						parser_yyerror("syntax error");
+					$$ = (Node *) makeString(pstrdup(
+						"SELECT pg_catalog.count(*) AS warning_count FROM mysql.show_warnings()"));
+				}
 			| SHOW DATABASES show_like_clause
 				{
 					$$ = mysqlMakeShowDatabases($3);

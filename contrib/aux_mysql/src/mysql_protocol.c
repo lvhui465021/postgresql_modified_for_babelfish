@@ -1697,9 +1697,9 @@ MysSessionStateExports mys_session_state_exports_data = {
  *
  * Backing implementation of SHOW WARNINGS: report the diagnostics
  * (Level / Code / Message) retained for the previous statement, mirroring
- * MySQL's SHOW WARNINGS result shape.  (SHOW COUNT(*) WARNINGS -- the
- * count-only variant -- is not implemented; the grammar only recognizes
- * plain SHOW WARNINGS.)
+ * MySQL's SHOW WARNINGS result shape.  SHOW COUNT(*) WARNINGS (mys_gram.y)
+ * reparses to a COUNT(*) wrapper over this same SRF rather than a separate
+ * backing function.
  *
  * Level is "Warning" for WARNING, "Error" for ERROR/FATAL/PANIC, and
  * "Note" for NOTICE/INFO (MySQL never retains ERROR here, since
