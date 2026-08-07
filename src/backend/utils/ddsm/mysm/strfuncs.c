@@ -2055,8 +2055,19 @@ text_position(text *t1, text *t2, Oid collid)
 	if (VARSIZE_ANY_EXHDR(t2) < 1)
 		return 1;
 
-	/* Otherwise, can't match if haystack is shorter than needle */
-	if (VARSIZE_ANY_EXHDR(t1) < VARSIZE_ANY_EXHDR(t2))
+	/*
+	 * The byte-length short-circuit only applies to deterministic
+	 * collations: a nondeterministic ICU collation can treat differently-
+	 * sized byte sequences as equivalent (canonical equivalence, accent /
+	 * case / stroke stripping, character expansion), so a shorter haystack
+	 * can still match.  Mirrors the kernel's text_position() in varlena.c,
+	 * which guards the same shortcut with
+	 * pg_newlocale_from_collation(collid)->deterministic.  For a
+	 * nondeterministic collid we fall through to the textpos() delegation
+	 * below instead of restoring the old byte-based assumption.
+	 */
+	if (VARSIZE_ANY_EXHDR(t1) < VARSIZE_ANY_EXHDR(t2) &&
+		pg_newlocale_from_collation(collid)->deterministic)
 		return 0;
 
     if (collid == caseInsensitiveId)

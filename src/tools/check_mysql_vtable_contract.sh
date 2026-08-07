@@ -80,12 +80,45 @@ check_reserved_members() {
 	done
 }
 
+# ADTExtMethod members are declared with typedef'd function-pointer types
+# (e.g. "pre_numeric_in_function pre_numeric_in;"), not the (*name)(...)
+# spelling, so the generic function_members() extractor cannot count them.
+# Count the typedef'd members directly: every function-pointer slot is
+# declared as "<name>_function <member>;", so counting those declarations
+# inside the struct body guards against accidental field loss/insertion.
+check_adt_function_member_count() {
+	file=$1
+	expected=$2
+	count=$(awk '
+		/typedef struct ADTExtMethod[[:space:]]*$/ { in_table = 1; next }
+		in_table && /^}[[:space:]]*ADTExtMethod[[:space:]]*;/ { exit }
+		in_table && /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*_function[[:space:]]+[A-Za-z_][A-Za-z0-9_]*;/ { count++ }
+		END { print count }
+	' "$file")
+	if [ "$count" -ne "$expected" ]; then
+		die "ADTExtMethod declares $count function-pointer members; expected $expected"
+	fi
+}
+
 check_function_members ParserRoutine \
 	"$include/parser/parserapi.h" 5
+
+# ADTExtMethod: 10 forward-compat ADT callbacks + 13 W5 dialect-dispatch
+# callbacks = 23 function-pointer slots (the allow_zero_length_char_typmod
+# bool member is not a function pointer and is checked separately below).
+# Every slot must have a live ->member() consumer in the kernel -- slots the
+# MySQL registrant leaves NULL are explicit future-dialect ABI reservations,
+# but the kernel call site (adtext -> slot, NULL -> legacy-hook fallback)
+# must exist for each one.  check_reserved_members then verifies the
+# reserved slots are actually declared, including the W5 slots
+# (validate_var_datatype_scale, replace_non_deterministic, ...) that
+# previously were not covered.
+check_adt_function_member_count \
+	"$include/utils/adtextapi.h" 23
 check_named_members ADTExtMethod \
-	"pre_time_in post_time_out date_in timestamp_in"
+	"pre_time_in post_time_out date_in timestamp_in validate_var_datatype_scale replace_non_deterministic"
 check_reserved_members "$include/utils/adtextapi.h" \
-	"pre_numeric_in post_numeric_out pre_timetz_in post_timetz_out pre_timestamp_in post_timestamp_out"
+	"pre_numeric_in post_numeric_out pre_timetz_in post_timetz_out pre_timestamp_in post_timestamp_out allow_zero_length_char_typmod expr_typmod coalesce_typmod param_collation default_collation strpos_non_deterministic adjust_numeric_result detect_numeric_overflow identity_datatype sequence_datatype sortby_nulls unique_constraint_nulls_ordering"
 check_function_members ProtocolRoutine \
 	"$include/postmaster/protocol_routine.h" 22
 
@@ -100,4 +133,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-echo "MySQL compatibility vtable contract: ParserRoutine 5/5, ADTExtMethod 4/4 live + 6 reserved, ProtocolRoutine 23/23 live"
+echo "MySQL compatibility vtable contract: ParserRoutine 5/5, ADTExtMethod 23/23 slots (6 live + 17 reserved), ProtocolRoutine 23/23 live"

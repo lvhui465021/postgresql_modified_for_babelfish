@@ -24,6 +24,7 @@
  */
 #include "parser/mysql/mys_gramparse.h"
 
+#include "adapter/mysql/mysql_packet.h"	/* mysql_show_warnings_preserve_stmts */
 #include "fmgr.h"                  /* PG_MODULE_MAGIC */
 #include "mb/pg_wchar.h"
 #include "parser/parser.h"
@@ -410,6 +411,16 @@ invalid_pair:
 }
 
 /*
+ * The exact raw-SQL marker the SHOW WARNINGS grammar action (mys_gram.y)
+ * substitutes in.  Recognized below by content, not by a side-channel
+ * flag, so that a multi-statement batch containing several SHOW WARNINGS
+ * occurrences -- or one that isn't first in the batch -- is handled
+ * correctly; see mysql_show_warnings_preserve_stmts (guc_tables.c) for why
+ * a single boolean consumed at dispatch time is not enough.
+ */
+#define MYSQL_SHOW_WARNINGS_QUERY "SELECT * FROM mysql.show_warnings()"
+
+/*
  * mys_raw_parser  --  parse a MySQL SQL string.
  *
  * Initializes the MySQL flex scanner, drives the bison grammar, and
@@ -423,6 +434,21 @@ mys_raw_parser(const char *str, RawParseMode mode)
 	int			yyresult;
 	List	   *result = NIL;
 	ListCell   *lc;
+
+	/*
+	 * mys_raw_parser() is only ever reached via the ParserRoutine vtable,
+	 * from pg_parse_query_with_routine() (once per simple-query batch) or
+	 * mysql_stmt.c's PREPARE handling (once per PREPARE) -- never
+	 * recursively while a statement from a previous call is executing (PL/
+	 * pgSQL's own expression/statement parsing goes through the plain,
+	 * dialect-independent raw_parser(), not this function).  So each call
+	 * here is unambiguously the start of a fresh top-level batch, and any
+	 * entries left over from a previous call (e.g. a PREPARE that was
+	 * never EXECUTEd, which does not dispatch through
+	 * mysql_before_simple_query_statement()) are stale and must not leak
+	 * into this batch's statement identities.
+	 */
+	mysql_show_warnings_preserve_stmts = NIL;
 
 	/* initialize the flex scanner */
 	yyscanner = mys_scanner_init(str, &yyextra.core_yy_extra,
@@ -470,8 +496,22 @@ mys_raw_parser(const char *str, RawParseMode mode)
 		RawStmt    *rawstmt = lfirst_node(RawStmt, lc);
 
 		if (IsA(rawstmt->stmt, String))
-			result = list_concat(result,
-							 raw_parser(strVal(rawstmt->stmt), RAW_PARSE_DEFAULT));
+		{
+			char	   *sql = strVal(rawstmt->stmt);
+			List	   *reparsed = raw_parser(sql, RAW_PARSE_DEFAULT);
+
+			if (strcmp(sql, MYSQL_SHOW_WARNINGS_QUERY) == 0)
+			{
+				ListCell   *rc;
+
+				foreach(rc, reparsed)
+					mysql_show_warnings_preserve_stmts =
+						lappend(mysql_show_warnings_preserve_stmts,
+								lfirst_node(RawStmt, rc)->stmt);
+			}
+
+			result = list_concat(result, reparsed);
+		}
 		else
 			result = lappend(result, rawstmt);
 	}

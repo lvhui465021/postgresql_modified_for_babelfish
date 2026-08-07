@@ -11,6 +11,7 @@
 #include "fmgr.h"
 #include "varatt.h"
 #include "utils/builtins.h"
+#include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
 #include "utils/varlena.h"
 
@@ -24,44 +25,6 @@ trim_trailing_spaces(text *value)
 		len--;
 
 	return cstring_to_text_with_len(data, len);
-}
-
-static bool
-mysql_like_match(const char *value, int value_len, const char *pattern,
-				 int pattern_len)
-{
-	while (pattern_len > 0)
-	{
-		if (*pattern == '%')
-		{
-			while (pattern_len > 0 && *pattern == '%')
-			{
-				pattern++;
-				pattern_len--;
-			}
-			if (pattern_len == 0)
-				return true;
-			while (value_len >= 0)
-			{
-				if (mysql_like_match(value, value_len, pattern, pattern_len))
-					return true;
-				if (value_len == 0)
-					break;
-				value++;
-				value_len--;
-			}
-			return false;
-		}
-		if (value_len == 0)
-			return false;
-		if (*pattern != '_' && *pattern != *value)
-			return false;
-		pattern++;
-		pattern_len--;
-		value++;
-		value_len--;
-	}
-	return value_len == 0;
 }
 
 PG_FUNCTION_INFO_V1(char_eq_char_for_date_format);
@@ -97,9 +60,21 @@ bpcharlike(PG_FUNCTION_ARGS)
 {
 	text	   *left = trim_trailing_spaces(PG_GETARG_BPCHAR_PP(0));
 	text	   *pattern = PG_GETARG_TEXT_PP(1);
+	Oid			collation = PG_GET_COLLATION();
 
-	PG_RETURN_BOOL(mysql_like_match(VARDATA_ANY(left), VARSIZE_ANY_EXHDR(left),
-								  VARDATA_ANY(pattern), VARSIZE_ANY_EXHDR(pattern)));
+	/*
+	 * Delegate to the kernel's LIKE matcher (varlena.c / textlike) so
+	 * wildcard semantics follow the operand collation: case/accent folding
+	 * under a nondeterministic collation (mysql.case_insensitive) and
+	 * character-based '_' advancement for multi-byte encodings.  MySQL
+	 * defines LIKE by the column's collation, not by raw bytes.  The
+	 * previous byte-wise matcher never consulted PG_GET_COLLATION(), so
+	 * CHAR columns stayed case-sensitive under mysql.case_insensitive and
+	 * '_' consumed one byte instead of one character.
+	 */
+	PG_RETURN_BOOL(DatumGetBool(DirectFunctionCall2Coll(textlike, collation,
+														PointerGetDatum(left),
+														PointerGetDatum(pattern))));
 }
 
 PG_FUNCTION_INFO_V1(bpcharnlike);
@@ -108,7 +83,9 @@ bpcharnlike(PG_FUNCTION_ARGS)
 {
 	text	   *left = trim_trailing_spaces(PG_GETARG_BPCHAR_PP(0));
 	text	   *pattern = PG_GETARG_TEXT_PP(1);
+	Oid			collation = PG_GET_COLLATION();
 
-	PG_RETURN_BOOL(!mysql_like_match(VARDATA_ANY(left), VARSIZE_ANY_EXHDR(left),
-								   VARDATA_ANY(pattern), VARSIZE_ANY_EXHDR(pattern)));
+	PG_RETURN_BOOL(!DatumGetBool(DirectFunctionCall2Coll(textlike, collation,
+														PointerGetDatum(left),
+														PointerGetDatum(pattern))));
 }

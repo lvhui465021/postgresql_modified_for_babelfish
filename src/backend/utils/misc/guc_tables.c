@@ -56,6 +56,7 @@
 #include "libpq/libpq.h"
 #include "libpq/oauth.h"
 #include "libpq/scram.h"
+#include "nodes/pg_list.h"
 #include "nodes/queryjumble.h"
 #include "optimizer/cost.h"
 #include "optimizer/geqo.h"
@@ -582,6 +583,26 @@ char	   *mysql_backend_database = "postgres";
 bool		mysql_listener_on = false;
 int			mysql_port = 3306;
 int			mysql_max_allowed_packet = 64 * 1024 * 1024;
+
+/*
+ * Populated by mys_raw_parser() (mysql_parser.so) with the exact Node*
+ * pointer(s) of any statement in the batch just parsed that resulted from
+ * reparsing the SHOW WARNINGS marker query (see MYSQL_SHOW_WARNINGS_QUERY
+ * in mys_parser.c); consumed by mysql_before_simple_query_statement()
+ * (aux_mysql.so) so the statement-boundary logic reads -- rather than
+ * discards -- the previous statement's diagnostics right before that
+ * specific statement runs.  A whole query string is parsed in one shot
+ * before any statement in the batch is dispatched (see pg_parse_query_
+ * with_routine() / the dispatch loop in exec_simple_query()), so matching
+ * by the statement's own Node* identity (recorded at the point of
+ * substitution) is required for correctness in a multi-statement batch --
+ * a single boolean consumed by "whichever statement dispatches next" would
+ * be satisfied by the wrong statement whenever SHOW WARNINGS is not first
+ * in the batch.  Lives in the kernel so both the parser module and the
+ * protocol module can reference it without a cross-module dependency.
+ */
+List	   *mysql_show_warnings_preserve_stmts = NIL;
+
 char	   *ConfigFileName;
 char	   *HbaFileName;
 char	   *IdentFileName;

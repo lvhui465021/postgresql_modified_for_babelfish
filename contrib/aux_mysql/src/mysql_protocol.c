@@ -29,6 +29,7 @@
 #include "adapter/mysql/systemVar.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
+#include "funcapi.h"
 #include "libpq/libpq-be.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
@@ -45,6 +46,7 @@
 #include "utils/elog.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/tuplestore.h"
 #include "fmgr.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
@@ -141,6 +143,31 @@ mysql_set_simple_query_more_results(bool more)
 static void
 mysql_before_simple_query_statement(Node *stmt)
 {
+	/*
+	 * Statement-boundary diagnostics: MySQL keeps the previous statement's
+	 * warnings readable via SHOW WARNINGS, so a new statement that is NOT
+	 * SHOW WARNINGS drops the inherited list before it runs (the list is
+	 * re-populated by any NOTICE/WARNING/INFO this statement raises).
+	 *
+	 * mys_raw_parser() records the exact Node* of any statement that came
+	 * from reparsing the SHOW WARNINGS marker query in
+	 * mysql_show_warnings_preserve_stmts, so it reads -- not clears -- the
+	 * list.  Matching by this statement's own identity (rather than a
+	 * single flag consumed by whichever statement dispatches next) is
+	 * required for multi-statement batches: the whole batch is parsed in
+	 * one shot before any statement in it is dispatched, so a flag would be
+	 * satisfied by the wrong statement whenever SHOW WARNINGS isn't first
+	 * in the batch.
+	 */
+	if (list_member_ptr(mysql_show_warnings_preserve_stmts, stmt))
+	{
+		mysql_show_warnings_preserve_stmts =
+			list_delete_ptr(mysql_show_warnings_preserve_stmts, stmt);
+		mysql_packet_reset_stmt_warning_state(mysql_ps());
+	}
+	else
+		mysql_packet_reset_warning_count(mysql_ps());
+
 	if (IsA(stmt, TransactionStmt))
 	{
 		TransactionStmt *xact = castNode(TransactionStmt, stmt);
@@ -279,14 +306,14 @@ mysql_write_lenenc_uint64(char *buf, uint64 value)
 		buf[pos++] = (char) (value & 0xff);
 		buf[pos++] = (char) ((value >> 8) & 0xff);
 	}
-	else if (value <= UINT32_MAX)
+	else if (value <= 0xFFFFFF)		/* 0xfd 3-byte form holds up to 2^24-1 */
 	{
 		buf[pos++] = (char) 0xfd;
 		buf[pos++] = (char) (value & 0xff);
 		buf[pos++] = (char) ((value >> 8) & 0xff);
 		buf[pos++] = (char) ((value >> 16) & 0xff);
 	}
-	else
+	else							/* >= 2^24: 0xfe 8-byte form */
 	{
 		buf[pos++] = (char) 0xfe;
 		for (int i = 0; i < 8; i++)
@@ -894,134 +921,152 @@ typedef struct MysDRState
 {
     DestReceiver pub;           /* must be first */
     MysPacketState *ps;         /* packet I/O */
-    bool         started;       /* rStartup called */
+    bool         started;       /* result-set metadata already sent */
     int          ncols;         /* number of columns */
+    TupleDesc    desc;          /* result descriptor saved at rStartup, so a
+                                 * zero-row result can still emit column
+                                 * metadata at rShutdown */
 } MysDRState;
+/*
+ * Send the text-protocol result-set header: column-count, one
+ * ColumnDefinition41 block per column, and the metadata EOF.  Called from
+ * mysDR_receiveSlot on the first row and from mysDR_rShutdown for a
+ * zero-row result set -- MySQL defines column metadata by the query's
+ * result descriptor, independent of whether any data rows are produced, so
+ * a zero-row SELECT / RETURNING must still emit it.
+ */
+static void
+mys_send_result_metadata(MysDRState *dr, TupleDesc desc)
+{
+    int         ncols = desc->natts;
+    uint32      caps = mysql_negotiated_caps(dr->ps);
+    int         i;
+
+    /*
+     * With CLIENT_OPTIONAL_RESULTSET_METADATA, the result-set header
+     * contains column_count followed by metadata_follows (1 for the full
+     * ColumnDefinition41 block).  libmysqlclient reads column_count first.
+     */
+    {
+        char colhdr[20];
+        int  pos = 0;
+        if (ncols < 251)
+        {
+            colhdr[pos++] = (char) ncols;
+        }
+        else if (ncols < 65536)
+        {
+            colhdr[pos++] = (char) 0xFC;
+            colhdr[pos++] = (char) (ncols & 0xFF);
+            colhdr[pos++] = (char) ((ncols >> 8) & 0xFF);
+        }
+        else
+        {
+            colhdr[pos++] = (char) 0xFD;
+            colhdr[pos++] = (char) (ncols & 0xFF);
+            colhdr[pos++] = (char) ((ncols >> 8) & 0xFF);
+            colhdr[pos++] = (char) ((ncols >> 16) & 0xFF);
+        }
+        if (caps & MYSQL_CAP_OPTIONAL_RESULTSET_METADATA)
+            colhdr[pos++] = 1;    /* RESULTSET_METADATA_FULL */
+        mysql_packet_write_ok(dr->ps, colhdr, (size_t) pos, 0x00);
+    }
+    for (i = 0; i < ncols; i++)
+    {
+        Form_pg_attribute attr = TupleDescAttr(desc, i);
+        StringInfoData colbuf;
+        initStringInfo(&colbuf);
+        /*
+         * MySQL ColumnDefinition41 packet (text protocol).
+         * All string fields are length-encoded.
+         */
+        /* catalog */
+        appendStringInfoChar(&colbuf, 3);
+        appendStringInfoString(&colbuf, "def");
+        /* schema = "" */
+        appendStringInfoChar(&colbuf, 0);
+        /* table alias (use empty for computed columns) */
+        appendStringInfoChar(&colbuf, 0);
+        /* org_table = "" */
+        appendStringInfoChar(&colbuf, 0);
+        /* col_name */
+        {
+            const char *cname = NameStr(attr->attname);
+            int         clen = (int) strlen(cname);
+            appendStringInfoChar(&colbuf, (char) clen);
+            appendBinaryStringInfo(&colbuf, cname, clen);
+        }
+        /*
+         * A PostgreSQL target-list entry does not preserve MySQL's
+         * original column identity.  It is therefore an expression from
+         * the protocol's point of view, including @@system variables:
+         * leave org_name empty, as MySQL 8.4 does for those fields.
+         */
+        appendStringInfoChar(&colbuf, 0);
+        /* length of fixed fields (always 0x0c = 12) */
+        appendStringInfoChar(&colbuf, 0x0c);
+        /* charset: utf8mb4 = 45 */
+        appendStringInfoChar(&colbuf, 0x2D); appendStringInfoChar(&colbuf, 0x00);
+        /* column length */
+        {
+            int32 collen = attr->atttypmod > 0 ? attr->atttypmod : 256;
+            mysql_field_append_int4_le(&colbuf, collen);
+        }
+        /* type: map PostgreSQL type/domain → MySQL type */
+        appendStringInfoChar(&colbuf,
+                             mysql_field_mysql_type(attr->atttypid));
+        /* flags */
+        appendStringInfoChar(&colbuf, 0x00); appendStringInfoChar(&colbuf, 0x00);
+        /* decimals */
+        appendStringInfoChar(&colbuf, 0x00);
+        /* filler */
+        appendStringInfoChar(&colbuf, 0x00); appendStringInfoChar(&colbuf, 0x00);
+
+        mysql_packet_write_ok(dr->ps, colbuf.data, colbuf.len, 0x00);
+        pfree(colbuf.data);
+    }
+    /*
+     * After column definitions: send EOF (or skip if DEPRECATE_EOF).
+     * openHalo's sendEOFPacketNoFlush is a no-op when DEPRECATE_EOF
+     * is negotiated -- the client knows the metadata section ends
+     * after the last ColumnDefinition41 packet.
+     */
+    if (!(caps & MYSQL_CAP_DEPRECATE_EOF))
+    {
+        uint16 status = mysql_server_status(0);
+        char eof[5] = {0xFE, 0x00, 0x00,
+            (char) (status & 0xff), (char) (status >> 8)};
+        mysql_packet_write_ok(dr->ps, eof, 5, 0xFE);
+    }
+    dr->started = true;
+
+    /*
+     * Track that a real result set (not CTAS via DestIntoRel) has begun.
+     * mysql_end_command uses this to send EOF (for SELECT) vs OK.
+     */
+    mysql_packet_set_result_started(dr->ps, true);
+
+    /*
+     * Flush column metadata before sending row data.  MySQL CLI 8.4.10
+     * pipelines the dollar-quote probe (select $$) immediately after
+     * receiving column metadata for @@version_comment.  Without an
+     * explicit flush here, the metadata and first row may travel in
+     * the same TCP segment, and the CLI sends its probe before the
+     * server has finished processing the probe — causing a mixed
+     * sequence-number stream that confuses libmysqlclient.
+     */
+    pq_flush();
+}
+
 static bool
 mysDR_receiveSlot(TupleTableSlot *slot, DestReceiver *self)
 {
     MysDRState *dr = (MysDRState *) self;
-    int         ncols;
+    int         ncols = slot->tts_tupleDescriptor->natts;
     int         i;
-    ncols = slot->tts_tupleDescriptor->natts;
+
     if (!dr->started)
-    {
-        uint32 caps = mysql_negotiated_caps(dr->ps);
-		/*
-		 * With CLIENT_OPTIONAL_RESULTSET_METADATA, the result-set header
-		 * contains column_count followed by metadata_follows (1 for the full
-		 * ColumnDefinition41 block).  libmysqlclient reads column_count first.
-		 */
-        {
-            char colhdr[20];
-            int  pos = 0;
-            if (ncols < 251)
-            {
-                colhdr[pos++] = (char) ncols;
-            }
-            else if (ncols < 65536)
-            {
-                colhdr[pos++] = (char) 0xFC;
-                colhdr[pos++] = (char) (ncols & 0xFF);
-                colhdr[pos++] = (char) ((ncols >> 8) & 0xFF);
-            }
-            else
-            {
-                colhdr[pos++] = (char) 0xFD;
-                colhdr[pos++] = (char) (ncols & 0xFF);
-                colhdr[pos++] = (char) ((ncols >> 8) & 0xFF);
-                colhdr[pos++] = (char) ((ncols >> 16) & 0xFF);
-            }
-			if (caps & MYSQL_CAP_OPTIONAL_RESULTSET_METADATA)
-				colhdr[pos++] = 1;    /* RESULTSET_METADATA_FULL */
-            mysql_packet_write_ok(dr->ps, colhdr, (size_t) pos, 0x00);
-        }
-        for (i = 0; i < ncols; i++)
-        {
-            Form_pg_attribute attr = TupleDescAttr(slot->tts_tupleDescriptor, i);
-            StringInfoData colbuf;
-            initStringInfo(&colbuf);
-            /*
-             * MySQL ColumnDefinition41 packet (text protocol).
-             * All string fields are length-encoded.
-             */
-            /* catalog */
-            appendStringInfoChar(&colbuf, 3);
-            appendStringInfoString(&colbuf, "def");
-            /* schema = "" */
-            appendStringInfoChar(&colbuf, 0);
-            /* table alias (use empty for computed columns) */
-            appendStringInfoChar(&colbuf, 0);
-            /* org_table = "" */
-            appendStringInfoChar(&colbuf, 0);
-            /* col_name */
-            {
-                const char *cname = NameStr(attr->attname);
-                int         clen = (int) strlen(cname);
-                appendStringInfoChar(&colbuf, (char) clen);
-                appendBinaryStringInfo(&colbuf, cname, clen);
-            }
-            /*
-             * A PostgreSQL target-list entry does not preserve MySQL's
-             * original column identity.  It is therefore an expression from
-             * the protocol's point of view, including @@system variables:
-             * leave org_name empty, as MySQL 8.4 does for those fields.
-             */
-            appendStringInfoChar(&colbuf, 0);
-            /* length of fixed fields (always 0x0c = 12) */
-            appendStringInfoChar(&colbuf, 0x0c);
-            /* charset: utf8mb4 = 45 */
-            appendStringInfoChar(&colbuf, 0x2D); appendStringInfoChar(&colbuf, 0x00);
-            /* column length */
-            {
-                int32 collen = attr->atttypmod > 0 ? attr->atttypmod : 256;
-                mysql_field_append_int4_le(&colbuf, collen);
-            }
-			/* type: map PostgreSQL type/domain → MySQL type */
-			appendStringInfoChar(&colbuf,
-								 mysql_field_mysql_type(attr->atttypid));
-            /* flags */
-            appendStringInfoChar(&colbuf, 0x00); appendStringInfoChar(&colbuf, 0x00);
-            /* decimals */
-            appendStringInfoChar(&colbuf, 0x00);
-            /* filler */
-            appendStringInfoChar(&colbuf, 0x00); appendStringInfoChar(&colbuf, 0x00);
-
-            mysql_packet_write_ok(dr->ps, colbuf.data, colbuf.len, 0x00);
-            pfree(colbuf.data);
-        }
-        /*
-         * After column definitions: send EOF (or skip if DEPRECATE_EOF).
-         * openHalo's sendEOFPacketNoFlush is a no-op when DEPRECATE_EOF
-         * is negotiated -- the client knows the metadata section ends
-         * after the last ColumnDefinition41 packet.
-         */
-        if (!(caps & MYSQL_CAP_DEPRECATE_EOF))
-        {
-			uint16 status = mysql_server_status(0);
-			char eof[5] = {0xFE, 0x00, 0x00,
-				(char) (status & 0xff), (char) (status >> 8)};
-            mysql_packet_write_ok(dr->ps, eof, 5, 0xFE);
-        }
-        dr->started = true;
-
-        /*
-         * Track that a real result set (not CTAS via DestIntoRel) has begun.
-         * mysql_end_command uses this to send EOF (for SELECT) vs OK.
-         */
-        mysql_packet_set_result_started(dr->ps, true);
-
-        /*
-         * Flush column metadata before sending row data.  MySQL CLI 8.4.10
-         * pipelines the dollar-quote probe (select $$) immediately after
-         * receiving column metadata for @@version_comment.  Without an
-         * explicit flush here, the metadata and first row may travel in
-         * the same TCP segment, and the CLI sends its probe before the
-         * server has finished processing the probe — causing a mixed
-         * sequence-number stream that confuses libmysqlclient.
-         */
-        pq_flush();
-    }
+        mys_send_result_metadata(dr, slot->tts_tupleDescriptor);
 
     /* Send a data row. */
     {
@@ -1079,12 +1124,21 @@ mysDR_receiveSlot(TupleTableSlot *slot, DestReceiver *self)
                     appendStringInfoChar(&rowbuf, (char)(slen & 0xFF));
                     appendStringInfoChar(&rowbuf, (char)((slen >> 8) & 0xFF));
                 }
-                else
+                else if (slen < (1 << 24))  /* 0xFD holds up to 2^24-1 */
                 {
                     appendStringInfoChar(&rowbuf, 0xFD);
                     appendStringInfoChar(&rowbuf, (char)(slen & 0xFF));
                     appendStringInfoChar(&rowbuf, (char)((slen >> 8) & 0xFF));
                     appendStringInfoChar(&rowbuf, (char)((slen >> 16) & 0xFF));
+                }
+                else                        /* >= 2^24: 0xFE 8-byte form */
+                {
+                    uint64  ulen = (uint64) slen;
+
+                    appendStringInfoChar(&rowbuf, 0xFE);
+                    for (int bi = 0; bi < 8; bi++)
+                        appendStringInfoChar(&rowbuf,
+                                             (char) ((ulen >> (bi * 8)) & 0xFF));
                 }
                 appendBinaryStringInfo(&rowbuf, str, slen);
                 pfree(str);
@@ -1103,6 +1157,12 @@ mysDR_rStartup(DestReceiver *self, int operation, TupleDesc typeinfo)
 {
     MysDRState *dr = (MysDRState *) self;
     dr->ncols = typeinfo->natts;
+    /*
+     * Keep a private copy of the result descriptor so a zero-row result
+     * set can still emit column metadata at rShutdown (MySQL defines
+     * metadata by the descriptor, not by whether rows were produced).
+     */
+    dr->desc = CreateTupleDescCopy(typeinfo);
     dr->started = false;
 }
 
@@ -1111,13 +1171,31 @@ mysDR_rShutdown(DestReceiver *self)
 {
     MysDRState *dr = (MysDRState *) self;
     /*
-     * Do NOT send EOF here.  The protocol-level completion packet
-     * (EOF for SELECT, OK for INSERT/UPDATE/DELETE) is the responsibility
-     * of mysql_end_command(), mirroring openHalo's endCommand.
-     * Sending a packet here would duplicate the end_command packet and
-     * confuse the client's protocol state machine.
+     * A zero-row result set still carries column metadata: MySQL defines
+     * it by the query's result descriptor, not by whether rows were
+     * produced.  mysDR_receiveSlot never ran for it, so emit the
+     * column-count / ColumnDefinition41 / EOF block now, which also marks
+     * result_set_started so mysql_end_command() finishes the result set
+     * with EOF rather than a DML-style OK.
+     *
+     * This deliberately does NOT send the final completion packet (EOF
+     * for a result set, OK for a DML statement) -- that stays the
+     * responsibility of mysql_end_command(), mirroring openHalo's
+     * endCommand, so a packet is not duplicated here.
+     *
+     * On an execution error this callback is not reached (the error
+     * propagates past ExecutorEnd), so the client sees a bare ERR packet
+     * -- matching MySQL, which never emits a half result set before an
+     * error.
      */
-    (void) dr;
+    if (!dr->started)
+        mys_send_result_metadata(dr, dr->desc);
+
+    if (dr->desc != NULL)
+    {
+        FreeTupleDesc(dr->desc);
+        dr->desc = NULL;
+    }
 }
 
 static void
@@ -1241,14 +1319,14 @@ mysql_end_command(const QueryCompletion *qc,
         }
 
         /*
-         * The warning count just sent belongs to this statement only --
-         * clear it so it doesn't leak into the next statement's completion
-         * packet (including the next result set of a multi-statement
-         * batch, which is why this reset is unconditional and not gated on
-         * mysql_simple_query_more_results like the seq/result_started
-         * resets below).
+         * The warning count just sent belongs to this statement.  The
+         * retained diagnostics are kept so SHOW WARNINGS can report them
+         * (the next statement's boundary in mysql_before_simple_query_
+         * statement drops them); only the "current statement produced a
+         * warning" marker is cleared, so the next statement's first
+         * diagnostic starts a fresh list.
          */
-        mysql_packet_reset_warning_count(mysql_ps());
+        mysql_packet_reset_stmt_warning_state(mysql_ps());
 
         /*
          * Reset sequence numbers for the next command.
@@ -1287,7 +1365,8 @@ mysql_null_command(CommandDest dest)
         ok[pos++] = (char) (warnings & 0xff);
         ok[pos++] = (char) (warnings >> 8);
         mysql_packet_write_ok(mysql_ps(), ok, (size_t) pos, 0x00);
-        mysql_packet_reset_warning_count(mysql_ps());
+        /* Keep retained diagnostics for SHOW WARNINGS, like end_command. */
+        mysql_packet_reset_stmt_warning_state(mysql_ps());
 
         /*
          * Reset sequence numbers for the next command, mirroring
@@ -1338,17 +1417,154 @@ mysql_send_ready_for_query(CommandDest dest)
  *    Error / GUC callbacks
  * ----------------------------------------------------------------
  */
+/*
+ * Map a PostgreSQL ErrorData to its MySQL wire-protocol error code and
+ * SQLSTATE.  Shared by mysql_send_error() (which emits the ERR packet for
+ * real errors) and the SHOW WARNINGS machinery (which reports the same
+ * code for suppressed NOTICE/WARNING/INFO diagnostics).
+ */
 static void
-mysql_send_error(ErrorData *edata)
+mysql_map_error(ErrorData *edata, uint16 *errcode, const char **sqlstate)
 {
-    uint16      errcode;
-    const char *sqlstate;
 	bool		mysql_label_duplicate =
 		(strncmp(edata->message, "ENUM contains duplicate value ", 30) == 0 ||
 		 strncmp(edata->message, "SET contains duplicate value ", 29) == 0);
 	bool		mysql_label_invalid =
 		(strcmp(edata->message, "invalid value for MySQL ENUM") == 0 ||
 		 strcmp(edata->message, "invalid value for MySQL SET") == 0);
+
+	if (mysql_label_duplicate)
+	{
+		*errcode = 1291;            /* ER_DUPLICATED_VALUE_IN_TYPE */
+		*sqlstate = "HY000";
+	}
+	else if (mysql_label_invalid)
+	{
+		*errcode = 1265;            /* ER_DATA_TRUNCATED in strict mode */
+		*sqlstate = "01000";
+	}
+	else if (strncmp(edata->message, "Too big precision ", 18) == 0)
+	{
+		/*
+		 * mys_validate_var_datatype_scale() (mys_adtext.c) rejects MySQL
+		 * DDL conditions that PostgreSQL's own limits would silently
+		 * accept.  Those ereports carry ERRCODE_INVALID_PARAMETER_VALUE,
+		 * which the generic mapping below would collapse into
+		 * ER_WRONG_ARGUMENTS (1210); give each condition its real MySQL
+		 * error code instead, so drivers/migration tools see the correct
+		 * numeric code and SQLSTATE.  "Too big scale" covers both
+		 * scale > 30 and scale > precision -- real MySQL reports both as
+		 * ER_TOO_BIG_SCALE (1425).
+		 */
+		*errcode = 1426;            /* ER_TOO_BIG_PRECISION */
+		*sqlstate = "42000";
+	}
+	else if (strncmp(edata->message, "Too big scale ", 14) == 0)
+	{
+		*errcode = 1425;            /* ER_TOO_BIG_SCALE */
+		*sqlstate = "42000";
+	}
+	else if (strncmp(edata->message, "Column length too big ", 22) == 0)
+	{
+		*errcode = 1074;            /* ER_TOO_BIG_FIELDLENGTH */
+		*sqlstate = "42000";
+	}
+	else
+    switch (edata->sqlerrcode)
+    {
+    case ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION:
+    case ERRCODE_INVALID_PASSWORD:
+    case ERRCODE_INSUFFICIENT_PRIVILEGE:
+        *errcode = 1045;
+        *sqlstate = "28000";
+        break;
+    case ERRCODE_PROTOCOL_VIOLATION:
+        *errcode = 1043;
+        *sqlstate = "08S01";
+        break;
+    case ERRCODE_UNDEFINED_TABLE:
+        *errcode = 1146;
+        *sqlstate = "42S02";
+        break;
+    case ERRCODE_UNDEFINED_COLUMN:
+        *errcode = 1054;
+        *sqlstate = "42S22";
+        break;
+	case ERRCODE_INVALID_SCHEMA_NAME:
+		*errcode = 1049;        /* ER_BAD_DB_ERROR */
+		*sqlstate = "42000";
+		break;
+    case ERRCODE_DUPLICATE_TABLE:
+        *errcode = 1050;
+        *sqlstate = "42S01";
+        break;
+    case ERRCODE_UNIQUE_VIOLATION:
+        *errcode = 1062;        /* ER_DUP_ENTRY */
+        *sqlstate = "23000";
+        break;
+    case ERRCODE_NOT_NULL_VIOLATION:
+        *errcode = 1048;        /* ER_BAD_NULL_ERROR */
+        *sqlstate = "23000";
+        break;
+    case ERRCODE_CHECK_VIOLATION:
+        *errcode = 3819;        /* ER_CHECK_CONSTRAINT_VIOLATED */
+        *sqlstate = "HY000";
+        break;
+    case ERRCODE_INVALID_DATETIME_FORMAT:
+    case ERRCODE_DATETIME_VALUE_OUT_OF_RANGE:
+        *errcode = 1292;        /* ER_TRUNCATED_WRONG_VALUE */
+        *sqlstate = "22007";
+        break;
+    case ERRCODE_INVALID_REGULAR_EXPRESSION:
+        *errcode = 1139;        /* ER_REGEXP_ERROR */
+        *sqlstate = "42000";
+        break;
+    case ERRCODE_UNDEFINED_FUNCTION:
+        *errcode = 1305;        /* ER_SP_DOES_NOT_EXIST */
+        *sqlstate = "42000";
+        break;
+    case ERRCODE_DATATYPE_MISMATCH:
+    case ERRCODE_CANNOT_COERCE:
+        *errcode = 1210;        /* ER_WRONG_ARGUMENTS */
+        *sqlstate = "HY000";
+        break;
+    case ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE:
+    case ERRCODE_INVALID_TEXT_REPRESENTATION:
+        *errcode = 1210;        /* ER_WRONG_ARGUMENTS */
+        *sqlstate = "HY000";
+        break;
+    case ERRCODE_SYNTAX_ERROR:
+        *errcode = 1064;
+        *sqlstate = "42000";
+        break;
+    case ERRCODE_UNDEFINED_PSTATEMENT:
+        *errcode = 1243;        /* ER_UNKNOWN_STMT_HANDLER */
+        *sqlstate = "HY000";
+        break;
+    case ERRCODE_INVALID_CURSOR_STATE:
+        *errcode = 1325;        /* ER_STMT_HAS_NO_OPEN_CURSOR */
+        *sqlstate = "24000";
+        break;
+    case ERRCODE_FEATURE_NOT_SUPPORTED:
+        *errcode = 1295;        /* ER_UNSUPPORTED_PS */
+        *sqlstate = "HY000";
+        break;
+    case ERRCODE_INVALID_PARAMETER_VALUE:
+        *errcode = 1210;        /* ER_WRONG_ARGUMENTS */
+        *sqlstate = "HY000";
+        break;
+    default:
+        *errcode = 1105;        /* ER_UNKNOWN_ERROR */
+        *sqlstate = "HY000";
+        break;
+    }
+}
+
+static void
+mysql_send_error(ErrorData *edata)
+{
+    uint16      errcode;
+    const char *sqlstate;
 
 	/*
 	 * Suppress non-error messages (NOTICE, WARNING, INFO) on the MySQL
@@ -1359,117 +1575,20 @@ mysql_send_error(ErrorData *edata)
 	 * where MySQL would return a successful OK with a warning count.
 	 *
 	 * Only ERROR, FATAL, and PANIC severities produce a real ERR packet.
-	 * The message text itself is still dropped (MySQL has no out-of-band
-	 * notice frame to carry it), but count it so the next completion
-	 * packet's warning-count field reflects that something was suppressed
-	 * instead of unconditionally reporting zero.
+	 * Each suppressed diagnostic is retained in the session diagnostics
+	 * area (with its MySQL error code and message text) so SHOW WARNINGS
+	 * can report it; the next completion packet's warning-count field
+	 * reflects how many were suppressed.
 	 */
 	if (edata->elevel < ERROR)
 	{
-		mysql_packet_add_warning(mysql_ps());
+		mysql_map_error(edata, &errcode, &sqlstate);
+		mysql_packet_add_warning(mysql_ps(), edata->elevel, errcode,
+								 sqlstate, edata->message);
 		return;
 	}
 
-    /* Map PG error codes to MySQL-compatible codes. */
-	if (mysql_label_duplicate)
-	{
-		errcode = 1291;             /* ER_DUPLICATED_VALUE_IN_TYPE */
-		sqlstate = "HY000";
-	}
-	else if (mysql_label_invalid)
-	{
-		errcode = 1265;             /* ER_DATA_TRUNCATED in strict mode */
-		sqlstate = "01000";
-	}
-	else
-    switch (edata->sqlerrcode)
-    {
-    case ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION:
-    case ERRCODE_INVALID_PASSWORD:
-    case ERRCODE_INSUFFICIENT_PRIVILEGE:
-        errcode = 1045;
-        sqlstate = "28000";
-        break;
-    case ERRCODE_PROTOCOL_VIOLATION:
-        errcode = 1043;
-        sqlstate = "08S01";
-        break;
-    case ERRCODE_UNDEFINED_TABLE:
-        errcode = 1146;
-        sqlstate = "42S02";
-        break;
-    case ERRCODE_UNDEFINED_COLUMN:
-        errcode = 1054;
-        sqlstate = "42S22";
-        break;
-	case ERRCODE_INVALID_SCHEMA_NAME:
-		errcode = 1049;         /* ER_BAD_DB_ERROR */
-		sqlstate = "42000";
-		break;
-    case ERRCODE_DUPLICATE_TABLE:
-        errcode = 1050;
-        sqlstate = "42S01";
-        break;
-    case ERRCODE_UNIQUE_VIOLATION:
-        errcode = 1062;         /* ER_DUP_ENTRY */
-        sqlstate = "23000";
-        break;
-    case ERRCODE_NOT_NULL_VIOLATION:
-        errcode = 1048;         /* ER_BAD_NULL_ERROR */
-        sqlstate = "23000";
-        break;
-    case ERRCODE_CHECK_VIOLATION:
-        errcode = 3819;         /* ER_CHECK_CONSTRAINT_VIOLATED */
-        sqlstate = "HY000";
-        break;
-    case ERRCODE_INVALID_DATETIME_FORMAT:
-    case ERRCODE_DATETIME_VALUE_OUT_OF_RANGE:
-        errcode = 1292;         /* ER_TRUNCATED_WRONG_VALUE */
-        sqlstate = "22007";
-        break;
-    case ERRCODE_INVALID_REGULAR_EXPRESSION:
-        errcode = 1139;         /* ER_REGEXP_ERROR */
-        sqlstate = "42000";
-        break;
-    case ERRCODE_UNDEFINED_FUNCTION:
-        errcode = 1305;         /* ER_SP_DOES_NOT_EXIST */
-        sqlstate = "42000";
-        break;
-    case ERRCODE_DATATYPE_MISMATCH:
-    case ERRCODE_CANNOT_COERCE:
-        errcode = 1210;         /* ER_WRONG_ARGUMENTS */
-        sqlstate = "HY000";
-        break;
-    case ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE:
-    case ERRCODE_INVALID_TEXT_REPRESENTATION:
-        errcode = 1210;         /* ER_WRONG_ARGUMENTS */
-        sqlstate = "HY000";
-        break;
-    case ERRCODE_SYNTAX_ERROR:
-        errcode = 1064;
-        sqlstate = "42000";
-        break;
-    case ERRCODE_UNDEFINED_PSTATEMENT:
-        errcode = 1243;         /* ER_UNKNOWN_STMT_HANDLER */
-        sqlstate = "HY000";
-        break;
-    case ERRCODE_INVALID_CURSOR_STATE:
-        errcode = 1325;         /* ER_STMT_HAS_NO_OPEN_CURSOR */
-        sqlstate = "24000";
-        break;
-    case ERRCODE_FEATURE_NOT_SUPPORTED:
-        errcode = 1295;         /* ER_UNSUPPORTED_PS */
-        sqlstate = "HY000";
-        break;
-    case ERRCODE_INVALID_PARAMETER_VALUE:
-        errcode = 1210;         /* ER_WRONG_ARGUMENTS */
-        sqlstate = "HY000";
-        break;
-    default:
-        errcode = 1105;         /* ER_UNKNOWN_ERROR */
-        sqlstate = "HY000";
-        break;
-    }
+	mysql_map_error(edata, &errcode, &sqlstate);
 
 	mysql_simple_query_more_results = false;
     mysql_packet_write_err(mysql_ps(), errcode, sqlstate,
@@ -1572,3 +1691,83 @@ MysSessionStateExports mys_session_state_exports_data = {
 	.last_insert_id = mys_session_last_insert_id,
 	.row_count = mys_session_row_count,
 };
+
+/*
+ * mysql.show_warnings()
+ *
+ * Backing implementation of SHOW WARNINGS: report the diagnostics
+ * (Level / Code / Message) retained for the previous statement, mirroring
+ * MySQL's SHOW WARNINGS result shape.  (SHOW COUNT(*) WARNINGS -- the
+ * count-only variant -- is not implemented; the grammar only recognizes
+ * plain SHOW WARNINGS.)
+ *
+ * Level is "Warning" for WARNING, "Error" for ERROR/FATAL/PANIC, and
+ * "Note" for NOTICE/INFO (MySQL never retains ERROR here, since
+ * mysql_send_error() only stores sub-ERROR severities).  Code is the
+ * MySQL wire-protocol error code and Message the PG error text.
+ */
+PG_FUNCTION_INFO_V1(mysql_show_warnings);
+Datum
+mysql_show_warnings(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext oldcontext;
+	MemoryContext per_query_ctx;
+	MysWarning *warnings = NULL;
+	int			nwarnings;
+	int			i;
+
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo) ||
+		(rsinfo->allowedModes & SFRM_Materialize) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("return type must be a row type")));
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = CreateTupleDescCopy(tupdesc);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	nwarnings = mysql_packet_get_warnings(mysql_ps(), &warnings);
+	for (i = 0; i < nwarnings; i++)
+	{
+		Datum		values[3];
+		bool		nulls[3] = {false, false, false};
+		const char *level_str;
+
+		switch (warnings[i].level)
+		{
+			case ERROR:
+				level_str = "Error";
+				break;
+			case WARNING:
+				level_str = "Warning";
+				break;
+			case NOTICE:
+			case INFO:
+			default:
+				level_str = "Note";
+				break;
+		}
+		values[0] = CStringGetTextDatum(level_str);
+		values[1] = Int32GetDatum((int32) warnings[i].errcode);
+		values[2] = CStringGetTextDatum(warnings[i].message);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+}

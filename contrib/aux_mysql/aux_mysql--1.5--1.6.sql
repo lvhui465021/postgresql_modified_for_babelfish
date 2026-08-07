@@ -149,3 +149,15 @@ BEGIN
     END IF;
 END;
 $function$;
+
+/*
+ * SHOW WARNINGS support: report the previous statement's suppressed
+ * NOTICE/WARNING/INFO diagnostics (Level / Code / Message), mirroring
+ * MySQL's SHOW WARNINGS result shape.  Backed by mysql_show_warnings()
+ * in the aux_mysql shared library, which reads the session diagnostics
+ * area retained by mysql_send_error().
+ */
+CREATE OR REPLACE FUNCTION mysql.show_warnings()
+RETURNS TABLE(Level pg_catalog.text, Code pg_catalog.int4, Message pg_catalog.text)
+AS '$libdir/aux_mysql', 'mysql_show_warnings'
+LANGUAGE C STABLE;

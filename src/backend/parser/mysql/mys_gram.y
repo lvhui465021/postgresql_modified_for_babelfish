@@ -931,7 +931,7 @@ mysqlMakeSimpleTrigger(bool replace, char *trigname, int16 timing,
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARBINARY VARCHAR VARIABLES VARIADIC VARYING
 	VERBOSE VERSION_P VIEW VIEWS VIRTUAL VISIBLE VOLATILE
 
-    WHEN WHERE WHILE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
+    WHEN WHERE WHILE WHITESPACE_P WARNINGS WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
 	XML_P XMLATTRIBUTES XMLCONCAT XMLELEMENT XMLEXISTS XMLFOREST XMLNAMESPACES
 	XMLPARSE XMLPI XMLROOT XMLSERIALIZE XMLTABLE XOR
@@ -2861,7 +2861,24 @@ VariableShowStmt:
 		;
 
 DBTableInfoShowStmt:
-			SHOW DATABASES show_like_clause
+			SHOW WARNINGS
+				{
+					/*
+					 * SHOW WARNINGS reports the previous statement's
+					 * suppressed NOTICE/WARNING/INFO diagnostics.  Emit the
+					 * report as raw SQL over the mysql.show_warnings() SRF
+					 * (same reparse path as SHOW DATABASES).  mys_raw_parser()
+					 * recognizes this exact literal when it performs the
+					 * reparse substitution and marks the resulting statement
+					 * so the statement-boundary logic in aux_mysql reads --
+					 * not clears -- the retained diagnostics list before
+					 * this statement runs (see MYSQL_SHOW_WARNINGS_QUERY in
+					 * mys_parser.c).
+					 */
+					$$ = (Node *) makeString(pstrdup(
+						"SELECT * FROM mysql.show_warnings()"));
+				}
+			| SHOW DATABASES show_like_clause
 				{
 					$$ = mysqlMakeShowDatabases($3);
 				}

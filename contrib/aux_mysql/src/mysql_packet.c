@@ -29,6 +29,7 @@
 struct MysPacketState
 {
     Port       *port;               /* MyProcPort (socket, secure_read/write) */
+    MemoryContext memctx;           /* connection-lifetime memory context    */
     uint8       seq;                /* next expected client sequence number    */
     uint8       server_seq;         /* next server sequence number to send     */
     void       *auth_state;         /* MysAuthState during handshake, else NULL */
@@ -40,9 +41,10 @@ struct MysPacketState
     bool        result_set_started;  /* true once column metadata has been sent */
     uint64      last_insert_id;     /* LAST_INSERT_ID() session value          */
     uint64      row_count;          /* ROW_COUNT() session value (-1 = unset)  */
-    uint32      warning_count;      /* NOTICE/WARNING/INFO suppressed since the
-                                      * last completion packet; surfaced in the
-                                      * OK/EOF warning-count field, then reset */
+    MysWarning *warnings;           /* suppressed NOTICE/WARNING/INFO list     */
+    int         nwarnings;          /* entries in warnings[]                   */
+    int         warnings_cap;       /* allocated size of warnings[]            */
+    bool        stmt_had_warnings;  /* current statement produced >= 1 warning */
 };
 
 /* ----------------------------------------------------------------
@@ -56,6 +58,13 @@ mysql_packet_create(Port *port)
 
     ps = (MysPacketState *) palloc0(sizeof(MysPacketState));
     ps->port = port;
+    /*
+     * The packet state outlives individual statements (SHOW WARNINGS reads
+     * diagnostics from an earlier statement), so keep connection-lifetime
+     * allocations in the context that created it rather than in a
+     * statement-scoped context.
+     */
+    ps->memctx = CurrentMemoryContext;
     ps->seq = 0;           /* client starts at seq 0 after server greeting   */
     ps->server_seq = 0;    /* greeting is seq 0                              */
 
@@ -66,7 +75,10 @@ void
 mysql_packet_free(MysPacketState *ps)
 {
     if (ps != NULL)
+    {
+        mysql_packet_reset_warning_count(ps);
         pfree(ps);
+    }
 }
 
 /* ----------------------------------------------------------------
@@ -500,23 +512,103 @@ mysql_packet_get_row_count(MysPacketState *ps)
 }
 
 void
-mysql_packet_add_warning(MysPacketState *ps)
+mysql_packet_add_warning(MysPacketState *ps, int elevel, uint16 errcode,
+                         const char *sqlstate, const char *message)
 {
-    if (ps != NULL && ps->warning_count < PG_UINT32_MAX)
-        ps->warning_count++;
+    MysWarning *w;
+    MemoryContext oldctx;
+
+    if (ps == NULL)
+        return;
+
+    /*
+     * The first diagnostic of a statement replaces the previous statement's
+     * retained list -- MySQL's per-statement warning set is overwritten by
+     * the next statement that produces diagnostics, not appended to it.
+     */
+    if (!ps->stmt_had_warnings)
+    {
+        mysql_packet_reset_warning_count(ps);
+        ps->stmt_had_warnings = true;
+    }
+
+    if (ps->nwarnings >= ps->warnings_cap)
+    {
+        int         new_cap = ps->warnings_cap == 0 ? 8 : ps->warnings_cap * 2;
+
+        oldctx = MemoryContextSwitchTo(ps->memctx);
+        /*
+         * repalloc() requires an already-palloc'd pointer -- unlike libc
+         * realloc(), it cannot take NULL, and ps->warnings is still NULL
+         * the first time any warning is ever added on this connection
+         * (palloc0'd by mysql_packet_create()).  Use palloc for that first
+         * allocation and repalloc only to grow an existing buffer.
+         */
+        if (ps->warnings == NULL)
+            ps->warnings = (MysWarning *) palloc(sizeof(MysWarning) * new_cap);
+        else
+            ps->warnings = (MysWarning *) repalloc(ps->warnings,
+                                                   sizeof(MysWarning) * new_cap);
+        ps->warnings_cap = new_cap;
+        MemoryContextSwitchTo(oldctx);
+    }
+    w = &ps->warnings[ps->nwarnings];
+    w->level = elevel;
+    w->errcode = errcode;
+    if (sqlstate != NULL)
+        memcpy(w->sqlstate, sqlstate, 5);
+    else
+        memset(w->sqlstate, ' ', 5);
+    w->sqlstate[5] = '\0';
+    /*
+     * The list outlives the statement that produced it (SHOW WARNINGS may
+     * read it several statements later), so copy the text into the
+     * connection-lifetime memory context rather than the statement's
+     * transient context.
+     */
+    oldctx = MemoryContextSwitchTo(ps->memctx);
+    w->message = pstrdup(message != NULL ? message : "");
+    MemoryContextSwitchTo(oldctx);
+    ps->nwarnings++;
 }
 
 uint32
 mysql_packet_get_warning_count(MysPacketState *ps)
 {
     if (ps != NULL)
-        return ps->warning_count;
+        return (uint32) ps->nwarnings;
+    return 0;
+}
+
+int
+mysql_packet_get_warnings(MysPacketState *ps, MysWarning **warnings)
+{
+    if (ps != NULL)
+    {
+        *warnings = ps->warnings;
+        return ps->nwarnings;
+    }
+    *warnings = NULL;
     return 0;
 }
 
 void
 mysql_packet_reset_warning_count(MysPacketState *ps)
 {
+    int         i;
+
+    if (ps == NULL)
+        return;
+    for (i = 0; i < ps->nwarnings; i++)
+        if (ps->warnings[i].message != NULL)
+            pfree(ps->warnings[i].message);
+    ps->nwarnings = 0;
+    ps->stmt_had_warnings = false;
+}
+
+void
+mysql_packet_reset_stmt_warning_state(MysPacketState *ps)
+{
     if (ps != NULL)
-        ps->warning_count = 0;
+        ps->stmt_had_warnings = false;
 }

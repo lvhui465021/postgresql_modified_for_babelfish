@@ -622,7 +622,7 @@ FEDERATED	NO	Federated MySQL storage engine	NULL	NULL	NULL
 SHOW PLUGINS
 --------------
 
-Query OK, 0 rows affected
+Empty set
 
 --------------
 SHOW SESSION VARIABLES LIKE 'sql_mode'

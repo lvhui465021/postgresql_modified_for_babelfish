@@ -406,7 +406,16 @@ mysql_verify_login(MysPacketState *ps, Port *port)
         return STATUS_ERROR;
     }
 
-    if (len < 36)
+    /*
+     * The fixed handshake header is 32 bytes (4 caps + 4 max_packet_size +
+     * 1 charset + 23 reserved); everything after it is bounded-parsed field
+     * by field below, so only require that fixed header to be present.  A
+     * legal minimum HandshakeResponse41 -- single-char username plus a
+     * zero-length auth response -- is 35 bytes; a fixed 36-byte floor would
+     * wrongly reject it.  The per-field remaining-length checks are the
+     * real guard against truncated packets.
+     */
+    if (len < 32)
     {
         ereport(COMMERROR,
                 (errmsg("MySQL login packet too short (%zu bytes)", len)));
@@ -533,22 +542,56 @@ mysql_verify_login(MysPacketState *ps, Port *port)
     }
 
     /* --- Schema name (NUL-terminated, if CLIENT_CONNECT_WITH_DB) --- */
-    if ((client_cap & CLIENT_CONNECT_WITH_DB) && remaining > 0)
+    if (client_cap & CLIENT_CONNECT_WITH_DB)
     {
-        size_t slen = strnlen(pos_ptr, remaining);
-        if (slen > 0 && slen < remaining)
+        size_t slen;
+
+        /*
+         * The client advertised CLIENT_CONNECT_WITH_DB, so the database
+         * field must be present.  Reject a packet that omits it outright,
+         * and one whose field is not NUL-terminated, instead of silently
+         * skipping it -- otherwise an empty database name leaves its NUL
+         * unconsumed and shifts the offset of any following field, and a
+         * malformed (unterminated) field would be accepted while the rest
+         * of the packet is silently ignored.
+         */
+        if (remaining == 0)
         {
-            schema_name = pos_ptr;
-            pos_ptr += slen + 1;
-            remaining -= slen + 1;
+            mysql_packet_write_err(ps, 1043, "08S01",
+                                   "Bad handshake: missing database name");
+            pfree(payload);
+            return STATUS_ERROR;
         }
+        slen = strnlen(pos_ptr, remaining);
+        if (slen >= remaining)
+        {
+            mysql_packet_write_err(ps, 1043, "08S01",
+                                   "Bad handshake: unterminated database name");
+            pfree(payload);
+            return STATUS_ERROR;
+        }
+        if (slen > 0)
+            schema_name = pos_ptr;
+        /* Consume the NUL terminator even for an empty database name. */
+        pos_ptr += slen + 1;
+        remaining -= slen + 1;
     }
 
 
     /* --- Auth plugin name (NUL-terminated, if CLIENT_PLUGIN_AUTH) --- */
-    if ((client_cap & CLIENT_PLUGIN_AUTH) && remaining > 0)
+    if (client_cap & CLIENT_PLUGIN_AUTH)
     {
-        size_t plen = strnlen(pos_ptr, remaining);
+        size_t plen;
+
+        /* Same "advertised, therefore must be present" rule as the schema. */
+        if (remaining == 0)
+        {
+            mysql_packet_write_err(ps, 1043, "08S01",
+                                   "Bad handshake: missing authentication plugin name");
+            pfree(payload);
+            return STATUS_ERROR;
+        }
+        plen = strnlen(pos_ptr, remaining);
 
         if (plen >= remaining)
         {

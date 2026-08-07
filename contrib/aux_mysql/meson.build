@@ -53,6 +53,7 @@ tests += {
     'sql': [
       'versioning',
     ],
+    'regress_args': ['--temp-config', files('aux_mysql_regress.conf')],
   },
   'tap': {
     'tests': [

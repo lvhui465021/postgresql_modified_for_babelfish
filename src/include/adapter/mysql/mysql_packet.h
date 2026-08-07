@@ -19,6 +19,7 @@
 #define MYSQL_PACKET_H
 
 #include "libpq/libpq-be.h"
+#include "nodes/pg_list.h"
 
 /* Maximum payload bytes in a single MySQL packet (2^24 - 1). */
 #define MYSQL_PACKET_HEADER_SIZE     4
@@ -103,18 +104,44 @@ extern uint64 mysql_packet_get_last_insert_id(MysPacketState *ps);
 extern void mysql_packet_set_row_count(MysPacketState *ps, uint64 count);
 extern uint64 mysql_packet_get_row_count(MysPacketState *ps);
 
+/* MySQL SHOW WARNINGS diagnostics, retained across statements. */
+typedef struct MysWarning
+{
+    int         level;          /* NOTICE / WARNING / INFO */
+    uint16      errcode;        /* MySQL error code */
+    char        sqlstate[6];    /* 5 chars + NUL */
+    char       *message;        /* pstrdup'd (connection-lifetime) */
+} MysWarning;
+
 /*
  * Track NOTICE/WARNING/INFO messages suppressed by mysql_send_error() (the
  * MySQL wire protocol has no independent notice frame -- these are folded
  * into the warning-count field of the next OK/EOF completion packet
- * instead).  mysql_packet_add_warning() increments the count; the
- * completion-packet sender reads it via mysql_packet_get_warning_count()
- * and must call mysql_packet_reset_warning_count() afterward so the count
- * doesn't leak into the next statement.
+ * instead).  Each suppressed diagnostic is retained -- with its MySQL
+ * error code and message text -- so SHOW WARNINGS can report it;
+ * mysql_packet_get_warning_count() returns the count used for the OK/EOF
+ * warning-count field, and mysql_packet_get_warnings() exposes the
+ * retained list.  mysql_packet_reset_warning_count() drops the retained
+ * diagnostics (called when a statement produced none, so the inherited
+ * list does not survive); mysql_packet_reset_stmt_warning_state() only
+ * clears the "current statement produced a warning" marker, keeping the
+ * list for SHOW WARNINGS.
  */
-extern void mysql_packet_add_warning(MysPacketState *ps);
+extern void mysql_packet_add_warning(MysPacketState *ps,
+                                     int elevel, uint16 errcode,
+                                     const char *sqlstate, const char *message);
 extern uint32 mysql_packet_get_warning_count(MysPacketState *ps);
+extern int mysql_packet_get_warnings(MysPacketState *ps, MysWarning **warnings);
 extern void mysql_packet_reset_warning_count(MysPacketState *ps);
+extern void mysql_packet_reset_stmt_warning_state(MysPacketState *ps);
+
+/*
+ * Node* pointers of statements that should preserve (not clear) the
+ * retained diagnostics list, populated by mys_raw_parser() and consumed by
+ * mysql_before_simple_query_statement().  See guc_tables.c for why this is
+ * a per-statement identity list rather than a single flag.
+ */
+extern List *mysql_show_warnings_preserve_stmts;
 
 /*
  * MySQL capability flags (subset relevant to our adapter).

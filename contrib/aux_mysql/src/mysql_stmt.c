@@ -391,12 +391,20 @@ mys_stmt_append_lenenc(StringInfo buf, const char *value, int len)
 		appendStringInfoChar(buf, (char) (len & 0xff));
 		appendStringInfoChar(buf, (char) ((len >> 8) & 0xff));
 	}
-	else
+	else if (len < (1 << 24))		/* 0xfd 3-byte form holds up to 2^24-1 */
 	{
 		appendStringInfoChar(buf, 0xfd);
 		appendStringInfoChar(buf, (char) (len & 0xff));
 		appendStringInfoChar(buf, (char) ((len >> 8) & 0xff));
 		appendStringInfoChar(buf, (char) ((len >> 16) & 0xff));
+	}
+	else							/* >= 2^24: 0xfe 8-byte form */
+	{
+		uint64		u = (uint64) len;
+
+		appendStringInfoChar(buf, 0xfe);
+		for (int i = 0; i < 8; i++)
+			appendStringInfoChar(buf, (char) ((u >> (i * 8)) & 0xff));
 	}
 	appendBinaryStringInfo(buf, value, len);
 }
