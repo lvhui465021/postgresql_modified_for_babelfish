@@ -243,7 +243,7 @@ proname	prosrc
 __mysql_trigger_mysql_ddl_trigger_source_mysql_ddl_after_insert	BEGIN
 INSERT INTO mysql_ddl_trigger_audit(id, value_int)
 VALUES (NEW.id, NEW.value_int);
-RETURN NEW;
+IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
 END
 1 row in set
 

@@ -36,6 +36,7 @@
 #include "libpq/pqcomm.h"           /* pq_getmsgstring, etc. (may borrow)  */
 #include "miscadmin.h"
 #include "postmaster/protocol_routine.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 
 #include "utils/elog.h"
@@ -127,15 +128,27 @@ typedef struct MysAuthState
 static void
 generate_scramble(uint8 *buf, size_t len)
 {
+    /*
+     * The mysql_native_password challenge-response scheme's security rests
+     * on this nonce being unpredictable. random()/srandom() is not a
+     * cryptographic PRNG -- it's a poor fit for a 20-byte value meant to
+     * carry that much entropy. Use the same strong RNG the kernel itself
+     * uses for the equivalent MD5/SCRAM/cancel-key values (libpq/auth.c,
+     * auth-scram.c, postgres.c).
+     */
+    if (!pg_strong_random(buf, len))
+        ereport(ERROR,
+                (errmsg("could not generate random MySQL auth scramble")));
+
+    /* We avoid NUL bytes so that the auth-plugin-data is clean. */
     for (size_t i = 0; i < len; i++)
     {
-        /* We avoid NUL bytes so that the auth-plugin-data is clean. */
-        uint8 b;
-        do
+        while (buf[i] == 0x00)
         {
-            b = (uint8) (random() & 0xFF);
-        } while (b == 0x00);
-        buf[i] = b;
+            if (!pg_strong_random(&buf[i], 1))
+                ereport(ERROR,
+                        (errmsg("could not generate random MySQL auth scramble")));
+        }
     }
 }
 
@@ -185,6 +198,19 @@ mysql_send_greeting(MysPacketState *ps, Port *port)
     /* Assemble packet payload. */
     server_version_len = (int) strlen(server_version);
     auth_plugin_name_len = (int) strlen(auth_plugin_name);
+
+    /*
+     * payload is a fixed 256-byte stack buffer; every other field this
+     * function writes into it is a small constant (auth-plugin-data,
+     * capability/status flags, the fixed "caching_sha2_password" plugin
+     * name, etc: well under 128 bytes total). mysql_server_version is the
+     * one GUC-controlled, administrator-editable field going into this
+     * buffer, with no length constraint of its own (it's a plain string
+     * GUC) -- clamp it here unconditionally rather than rely on whoever
+     * sets the GUC to keep it short.
+     */
+    if (server_version_len > (int) sizeof(payload) - 128)
+        server_version_len = (int) sizeof(payload) - 128;
     thread_id = (uint32)(MyProcPid & 0xFFFFFFFF);
 
     capability = ((uint32) cap_hi << 16) | (uint32) cap_lo;
@@ -197,9 +223,20 @@ mysql_send_greeting(MysPacketState *ps, Port *port)
     pos += server_version_len;
     payload[pos++] = '\0';
 
+    /*
+     * Connection ID, capability, and status fields are all multi-byte
+     * integers that the MySQL wire protocol mandates little-endian
+     * regardless of server architecture -- write them byte-by-byte rather
+     * than memcpy'ing the host's native representation (correct on
+     * little-endian hosts like x86_64/aarch64, but wrong on a big-endian
+     * one).
+     */
+
     /* Connection ID */
-    memcpy(payload + pos, &thread_id, 4);
-    pos += 4;
+    payload[pos++] = (char) (thread_id & 0xFF);
+    payload[pos++] = (char) ((thread_id >> 8) & 0xFF);
+    payload[pos++] = (char) ((thread_id >> 16) & 0xFF);
+    payload[pos++] = (char) ((thread_id >> 24) & 0xFF);
 
     /* Auth-plugin-data part 1 */
     memcpy(payload + pos, auth->auth_plugin_data, MYSQL_SCRAMBLE_PART1_LEN);
@@ -209,19 +246,19 @@ mysql_send_greeting(MysPacketState *ps, Port *port)
     payload[pos++] = (char) filler;
 
     /* Capability flags (lower 16) */
-    memcpy(payload + pos, &cap_lo, 2);
-    pos += 2;
+    payload[pos++] = (char) (cap_lo & 0xFF);
+    payload[pos++] = (char) ((cap_lo >> 8) & 0xFF);
 
     /* Character set */
     payload[pos++] = (char) charset;
 
     /* Status flags */
-    memcpy(payload + pos, &status_flags, 2);
-    pos += 2;
+    payload[pos++] = (char) (status_flags & 0xFF);
+    payload[pos++] = (char) ((status_flags >> 8) & 0xFF);
 
     /* Capability flags (upper 16) */
-    memcpy(payload + pos, &cap_hi, 2);
-    pos += 2;
+    payload[pos++] = (char) (cap_hi & 0xFF);
+    payload[pos++] = (char) ((cap_hi >> 8) & 0xFF);
 
     /* Length of auth-plugin-data */
     payload[pos++] = (char) MYSQL_AUTH_PLUGIN_DATA_LEN;
@@ -437,10 +474,14 @@ mysql_verify_login(MysPacketState *ps, Port *port)
      * port->database_name must always be set because BackendInitialize
      * dereferences it (and PostgresMain passes it to InitPostgres).
      * MySQL connections use the configured mysql_backend_database (default
-     * "postgres"), but since GUCs aren't available yet we hardcode the
-     * same default. */
+     * "postgres"). This runs in the forked backend after GUC initialization
+     * (mysql_startup_exchange -> BackendInitialize), and the GUC is
+     * PGC_POSTMASTER, so its value is already settled and safe to read here. */
     port->user_name = MemoryContextStrdup(TopMemoryContext, username);
-    port->database_name = MemoryContextStrdup(TopMemoryContext, "postgres");
+    port->database_name = MemoryContextStrdup(TopMemoryContext,
+                                               (mysql_backend_database != NULL &&
+                                                mysql_backend_database[0] != '\0')
+                                               ? mysql_backend_database : "postgres");
     if (schema_name != NULL && schema_name[0] != '\0')
         port->compat_database_name = MemoryContextStrdup(TopMemoryContext,
                                                           schema_name);

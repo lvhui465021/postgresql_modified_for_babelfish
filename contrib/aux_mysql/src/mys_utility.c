@@ -511,9 +511,23 @@ mys_standard_ProcessUtility(PlannedStmt *pstmt,
 
 		case T_CopyStmt:
 			{
+				CopyStmt   *stmt = (CopyStmt *) parsetree;
 				uint64		processed;
 
-				DoCopy(pstate, (CopyStmt *) parsetree,
+				/*
+				 * STDIN/STDOUT COPY (filename == NULL) streams CopyData via
+				 * pq_beginmessage()/pq_putmessage() -- raw PostgreSQL wire
+				 * framing with no ProtocolRoutine dispatch -- which corrupts
+				 * a MySQL connection's byte stream. Server-side COPY ...
+				 * TO/FROM 'path' never touches the frontend and is fine.
+				 */
+				if (stmt->filename == NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("COPY ... TO/FROM STDIN/STDOUT is not supported over the MySQL protocol"),
+							 errhint("Use \"COPY ... TO/FROM '<path>'\" instead.")));
+
+				DoCopy(pstate, stmt,
 					   pstmt->stmt_location, pstmt->stmt_len,
 					   &processed);
 				if (qc)
@@ -566,51 +580,26 @@ mys_standard_ProcessUtility(PlannedStmt *pstmt,
 			DropDatabase(pstate, (DropdbStmt *) parsetree);
 			break;
 
-			/* Query-level asynchronous notification */
+			/*
+			 * LISTEN/NOTIFY/UNLISTEN are rejected outright on MySQL
+			 * connections: NotifyMyFrontEnd() (async.c) delivers a pending
+			 * notification by calling pq_beginmessage()/pq_putmessage()
+			 * directly -- raw PostgreSQL wire framing -- and it can fire
+			 * asynchronously between MySQL commands on any backend that has
+			 * ever LISTENed, with no ProtocolRoutine dispatch to catch it.
+			 * There is no MySQL-native equivalent to translate this into,
+			 * so refuse LISTEN/UNLISTEN up front rather than let a session
+			 * get into a state where an unrelated NOTIFY can corrupt its
+			 * byte stream later. NOTIFY itself is also rejected: allowing a
+			 * MySQL session to notify while never being able to listen
+			 * would be a one-sided, surprising feature.
+			 */
 		case T_NotifyStmt:
-			{
-				NotifyStmt *stmt = (NotifyStmt *) parsetree;
-
-				Async_Notify(stmt->conditionname, stmt->payload);
-			}
-			break;
-
 		case T_ListenStmt:
-			{
-				ListenStmt *stmt = (ListenStmt *) parsetree;
-
-				CheckRestrictedOperation("LISTEN");
-
-				/*
-				 * We don't allow LISTEN in background processes, as there is
-				 * no mechanism for them to collect NOTIFY messages, so they'd
-				 * just block cleanout of the async SLRU indefinitely.
-				 * (Authors of custom background workers could bypass this
-				 * restriction by calling Async_Listen directly, but then it's
-				 * on them to provide some mechanism to process the message
-				 * queue.)  Note there seems no reason to forbid UNLISTEN.
-				 */
-				if (MyBackendType != B_BACKEND)
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					/* translator: %s is name of a SQL command, eg LISTEN */
-							 errmsg("cannot execute %s within a background process",
-									"LISTEN")));
-
-				Async_Listen(stmt->conditionname);
-			}
-			break;
-
 		case T_UnlistenStmt:
-			{
-				UnlistenStmt *stmt = (UnlistenStmt *) parsetree;
-
-				CheckRestrictedOperation("UNLISTEN");
-				if (stmt->conditionname)
-					Async_Unlisten(stmt->conditionname);
-				else
-					Async_UnlistenAll();
-			}
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("LISTEN/NOTIFY is not supported over the MySQL protocol")));
 			break;
 
 		case T_LoadStmt:

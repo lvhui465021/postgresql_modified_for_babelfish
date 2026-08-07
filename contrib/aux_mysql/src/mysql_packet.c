@@ -16,6 +16,7 @@
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "utils/elog.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 
 #include <errno.h>
@@ -128,6 +129,15 @@ mysql_packet_read(MysPacketState *ps, char **payload, size_t *len)
         {
             ereport(COMMERROR,
                     (errmsg("MySQL packet payload is too large")));
+            if (buf != NULL)
+                pfree(buf);
+            return false;
+        }
+        if (total_len + (size_t) payload_len > (size_t) mysql_max_allowed_packet)
+        {
+            ereport(COMMERROR,
+                    (errmsg("MySQL packet payload exceeds mysql_max_allowed_packet (%d bytes)",
+                            mysql_max_allowed_packet)));
             if (buf != NULL)
                 pfree(buf);
             return false;
@@ -289,6 +299,19 @@ mysql_packet_write_err(MysPacketState *ps,
     va_start(args, fmt);
     msglen = vsnprintf(msgbuf, sizeof(msgbuf), fmt, args);
     va_end(args);
+
+    /*
+     * vsnprintf() returns the length the message *would* have had if
+     * msgbuf were unbounded (or a negative value on encoding failure) --
+     * not the number of bytes actually written into msgbuf.  Clamp to
+     * what's actually there before treating it as a length to copy out of
+     * msgbuf below, or this reads adjacent stack memory into the packet
+     * sent to the client.
+     */
+    if (msglen < 0)
+        msglen = 0;
+    else if (msglen >= (int) sizeof(msgbuf))
+        msglen = sizeof(msgbuf) - 1;
 
     /*
      * MySQL ERR packet payload:

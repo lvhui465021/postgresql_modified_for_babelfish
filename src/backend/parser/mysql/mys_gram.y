@@ -355,7 +355,16 @@ mysqlMakeSimpleTrigger(bool replace, char *trigname, int16 timing,
 		event_name = psprintf("%s%sTRUNCATE", event_name,
 																*event_name ? " OR " : "");
 
-	function_body = psprintf("BEGIN\n%s%s\nRETURN NEW;\nEND",
+	/*
+	 * NEW is NULL for a row-level DELETE trigger in PL/pgSQL, and a BEFORE
+	 * row trigger returning NULL cancels the operation for that row -- so
+	 * unconditionally "RETURN NEW" here would make every BEFORE DELETE
+	 * trigger silently cancel the delete it's attached to.  Branch on
+	 * TG_OP so DELETE returns OLD (letting the delete proceed) while every
+	 * other event keeps returning NEW; this also covers triggers created
+	 * for more than one event (e.g. "BEFORE INSERT OR DELETE").
+	 */
+	function_body = psprintf("BEGIN\n%s%s\nIF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;\nEND",
 							 body, body_length > 0 ? ";" : "");
 
 	return (Node *) makeString(psprintf(
@@ -8459,7 +8468,7 @@ CreateForeignTableStmt:
 					n->base.relation = $4;
 					n->base.inhRelations = list_make1($7);
 					n->base.tableElts = $8;
-                                        n->base.partbound = ((PartitionCmd *)$9)->bound;
+                                        n->base.partbound = $9;
 					n->base.ofTypename = NULL;
 					n->base.constraints = NIL;
 					n->base.options = NIL;
@@ -8480,7 +8489,7 @@ CreateForeignTableStmt:
 					n->base.relation = $7;
 					n->base.inhRelations = list_make1($10);
 					n->base.tableElts = $11;
-                                        n->base.partbound = ((PartitionCmd *)$12)->bound;
+                                        n->base.partbound = $12;
 					n->base.ofTypename = NULL;
 					n->base.constraints = NIL;
 					n->base.options = NIL;

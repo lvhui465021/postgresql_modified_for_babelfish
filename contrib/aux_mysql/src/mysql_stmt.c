@@ -401,6 +401,24 @@ mys_stmt_append_lenenc(StringInfo buf, const char *value, int len)
 	appendBinaryStringInfo(buf, value, len);
 }
 
+/*
+ * Append a 4-byte little-endian integer, as the MySQL wire protocol
+ * mandates for fields like column length regardless of server
+ * architecture -- unlike appendBinaryStringInfo(buf, (char *) &v, 4), this
+ * is correct on big-endian hosts too.
+ */
+static void
+mys_stmt_append_int4_le(StringInfo buf, int32 value)
+{
+	uint8 le[4];
+
+	le[0] = (uint8) (value & 0xFF);
+	le[1] = (uint8) ((value >> 8) & 0xFF);
+	le[2] = (uint8) ((value >> 16) & 0xFF);
+	le[3] = (uint8) ((value >> 24) & 0xFF);
+	appendBinaryStringInfo(buf, (char *) le, 4);
+}
+
 static void
 mys_stmt_send_column(MysPacketState *ps, const char *name, Oid typid,
 					 int32 typmod)
@@ -418,7 +436,7 @@ mys_stmt_send_column(MysPacketState *ps, const char *name, Oid typid,
 	appendStringInfoChar(&buf, 0x0c);
 	appendStringInfoChar(&buf, 0x2d);
 	appendStringInfoChar(&buf, 0x00);
-	appendBinaryStringInfo(&buf, (char *) &collen, sizeof(collen));
+	mys_stmt_append_int4_le(&buf, collen);
 	appendStringInfoChar(&buf, mys_stmt_mysql_type(typid));
 	appendStringInfoChar(&buf, 0x00);
 	appendStringInfoChar(&buf, 0x00);

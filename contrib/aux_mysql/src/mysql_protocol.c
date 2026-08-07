@@ -382,6 +382,24 @@ mysql_field_append_lenenc(StringInfo buf, const char *value)
 }
 
 /*
+ * Append a 4-byte little-endian integer, as the MySQL wire protocol
+ * mandates for fields like column length regardless of server
+ * architecture -- unlike appendBinaryStringInfo(buf, (char *) &v, 4), this
+ * is correct on big-endian hosts too.
+ */
+static void
+mysql_field_append_int4_le(StringInfo buf, int32 value)
+{
+	uint8 le[4];
+
+	le[0] = (uint8) (value & 0xFF);
+	le[1] = (uint8) ((value >> 8) & 0xFF);
+	le[2] = (uint8) ((value >> 16) & 0xFF);
+	le[3] = (uint8) ((value >> 24) & 0xFF);
+	appendBinaryStringInfo(buf, (char *) le, 4);
+}
+
+/*
  * mysqld_list_fields() restores the table's default record before sending
  * field metadata.  PostgreSQL keeps only an analyzed default expression, so
  * this is deliberately a limited literal projection.  In particular it
@@ -480,7 +498,7 @@ mysql_field_send_definition(MysPacketState *ps, const char *schema,
 	mysql_field_append_lenenc(&buf, NameStr(attr->attname));
 	appendStringInfoChar(&buf, 0x0c);
 	appendStringInfoChar(&buf, 0x2d); appendStringInfoChar(&buf, 0x00);
-	appendBinaryStringInfo(&buf, (char *) &collen, sizeof(collen));
+	mysql_field_append_int4_le(&buf, collen);
 	appendStringInfoChar(&buf, mysql_field_mysql_type(attr->atttypid));
 	appendStringInfoChar(&buf, attr->attnotnull ? 0x01 : 0x00);
 	appendStringInfoChar(&buf, 0x00);
@@ -957,7 +975,7 @@ mysDR_receiveSlot(TupleTableSlot *slot, DestReceiver *self)
             /* column length */
             {
                 int32 collen = attr->atttypmod > 0 ? attr->atttypmod : 256;
-                appendBinaryStringInfo(&colbuf, (char *)&collen, 4);
+                mysql_field_append_int4_le(&colbuf, collen);
             }
 			/* type: map PostgreSQL type/domain → MySQL type */
 			appendStringInfoChar(&colbuf,
