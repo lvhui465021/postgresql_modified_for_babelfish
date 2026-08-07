@@ -1152,20 +1152,36 @@ mysql_end_command(const QueryCompletion *qc,
     if (dest == DestRemote || dest == DestRemoteExecute ||
         dest == DestRemoteSimple)
     {
-		CommandTag  tag = qc->commandTag;
 		uint32      caps = mysql_negotiated_caps(mysql_ps());
 		uint16		status = mysql_server_status(0);
 
+		/*
+		 * NOTICE/WARNING/INFO messages suppressed by mysql_send_error()
+		 * during this statement.  The OK/EOF warning-count field is 16
+		 * bits; clamp instead of wrapping if something pathological
+		 * generated more than 65535 of them.
+		 */
+		uint16      warnings = (uint16) Min(mysql_packet_get_warning_count(mysql_ps()),
+		                                    65535);
+
         /*
-         * Mirror openHalo's endCommand: SELECT → EOF, DML → OK.
-         * The DestReceiver (mysDR_rShutdown) does NOT send the final
-         * completion packet; we own it here.
+         * Mirror openHalo's endCommand: a statement that actually sent a
+         * result set (column definitions + rows via mysDR_receiveSlot)
+         * gets EOF; everything else gets a DML-style OK.  This must key
+         * off result_set_started alone, not commandTag == CMDTAG_SELECT:
          *
-         * PG18 ExecCreateTableAs uses CMDTAG_SELECT for CTAS, but no
-         * result set was ever started (DestIntoRel).  Check
-         * result_set_started to send OK for CTAS, not EOF.
+         *   - PG18 ExecCreateTableAs uses CMDTAG_SELECT for CTAS, but no
+         *     result set was ever started (DestIntoRel) -- result_started
+         *     stays false, so CTAS correctly falls through to OK.
+         *   - DELETE/UPDATE ... RETURNING tag as CMDTAG_DELETE/UPDATE, not
+         *     CMDTAG_SELECT, but DO start a real result set through the
+         *     same mysDR_receiveSlot path SELECT uses.  Gating on
+         *     commandTag here previously sent a DML OK packet after the
+         *     client had already received column metadata and rows
+         *     expecting a terminating EOF, desyncing the session (the
+         *     client CLI hangs waiting for the packet it never got).
          */
-        if (tag == CMDTAG_SELECT && mysql_packet_get_result_started(mysql_ps()))
+        if (mysql_packet_get_result_started(mysql_ps()))
         {
 			/* Track row count for FOUND_ROWS() */
 			mysql_packet_set_found_rows(mysql_ps(), qc->nprocessed);
@@ -1184,13 +1200,15 @@ mysql_end_command(const QueryCompletion *qc,
                 ok[pos++] = 0x00;                    /* last_insert_id (lenenc 0) */
                 ok[pos++] = (char) (status & 0xff);
                 ok[pos++] = (char) (status >> 8);
-                ok[pos++] = 0x00; ok[pos++] = 0x00;  /* warnings: 0 */
+                ok[pos++] = (char) (warnings & 0xff);
+                ok[pos++] = (char) (warnings >> 8);
                 mysql_packet_write_ok(mysql_ps(), ok, (size_t) pos, 0xFE);
             }
             else
             {
                 /* Traditional EOF to mark end of result set. */
-                char eof[5] = {0xFE, 0x00, 0x00,
+                char eof[5] = {0xFE,
+                    (char) (warnings & 0xff), (char) (warnings >> 8),
                     (char) (status & 0xff), (char) (status >> 8)};
                 mysql_packet_write_ok(mysql_ps(), eof, 5, 0xFE);
             }
@@ -1216,10 +1234,21 @@ mysql_end_command(const QueryCompletion *qc,
 			pos += mysql_write_lenenc_uint64(ok + pos, last_id);
 			ok[pos++] = (char) (status & 0xff);
 			ok[pos++] = (char) (status >> 8);
-            ok[pos++] = 0x00; ok[pos++] = 0x00;  /* warnings: 0 */
+            ok[pos++] = (char) (warnings & 0xff);
+            ok[pos++] = (char) (warnings >> 8);
 
             mysql_packet_write_ok(mysql_ps(), ok, (size_t) pos, 0x00);
         }
+
+        /*
+         * The warning count just sent belongs to this statement only --
+         * clear it so it doesn't leak into the next statement's completion
+         * packet (including the next result set of a multi-statement
+         * batch, which is why this reset is unconditional and not gated on
+         * mysql_simple_query_more_results like the seq/result_started
+         * resets below).
+         */
+        mysql_packet_reset_warning_count(mysql_ps());
 
         /*
          * Reset sequence numbers for the next command.
@@ -1246,6 +1275,8 @@ mysql_null_command(CommandDest dest)
     {
         /* Empty query → MySQL OK. */
         uint16 status = mysql_server_status(0);
+        uint16 warnings = (uint16) Min(mysql_packet_get_warning_count(mysql_ps()),
+                                       65535);
         char ok[7];
         int  pos = 0;
         ok[pos++] = 0x00;
@@ -1253,8 +1284,10 @@ mysql_null_command(CommandDest dest)
         ok[pos++] = 0x00;
         ok[pos++] = (char) (status & 0xff);
         ok[pos++] = (char) (status >> 8);
-        ok[pos++] = 0x00; ok[pos++] = 0x00;
+        ok[pos++] = (char) (warnings & 0xff);
+        ok[pos++] = (char) (warnings >> 8);
         mysql_packet_write_ok(mysql_ps(), ok, (size_t) pos, 0x00);
+        mysql_packet_reset_warning_count(mysql_ps());
 
         /*
          * Reset sequence numbers for the next command, mirroring
@@ -1326,9 +1359,16 @@ mysql_send_error(ErrorData *edata)
 	 * where MySQL would return a successful OK with a warning count.
 	 *
 	 * Only ERROR, FATAL, and PANIC severities produce a real ERR packet.
+	 * The message text itself is still dropped (MySQL has no out-of-band
+	 * notice frame to carry it), but count it so the next completion
+	 * packet's warning-count field reflects that something was suppressed
+	 * instead of unconditionally reporting zero.
 	 */
 	if (edata->elevel < ERROR)
+	{
+		mysql_packet_add_warning(mysql_ps());
 		return;
+	}
 
     /* Map PG error codes to MySQL-compatible codes. */
 	if (mysql_label_duplicate)
@@ -1445,6 +1485,7 @@ mysql_send_error(ErrorData *edata)
     mysql_packet_reset_seq(mysql_ps());
     mysql_packet_set_server_seq(mysql_ps(), 1);
     mysql_packet_set_result_started(mysql_ps(), false);
+    mysql_packet_reset_warning_count(mysql_ps());
 }
 
 static void

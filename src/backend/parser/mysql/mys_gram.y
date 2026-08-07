@@ -436,6 +436,7 @@ mysqlMakeSimpleTrigger(bool replace, char *trigname, int16 timing,
 	struct SelectLimit	*selectlimit;
 	SetQuantifier	 setquantifier;
 	struct GroupClause  *groupclause;
+	ReturningClause		*retclause;
 }
 
 %type <node>	stmt toplevel_stmt routine_body_stmt
@@ -571,6 +572,7 @@ mysqlMakeSimpleTrigger(bool replace, char *trigname, int16 timing,
 %type <importqual> import_qualification
 %type <node>	vacuum_relation
 %type <selectlimit> opt_select_limit select_limit limit_clause
+%type <retclause> returning_clause
 
 %type <list>	parse_toplevel stmtmulti routine_body_stmt_list
 				OptTableElementList TableElementList OptInherit definition
@@ -596,7 +598,7 @@ mysqlMakeSimpleTrigger(bool replace, char *trigname, int16 timing,
 				opclass_purpose opt_opfamily transaction_mode_list_or_empty
 				OptTableFuncElementList TableFuncElementList opt_type_modifiers
 				prep_type_clause
-				using_clause returning_clause
+				using_clause
 				opt_enum_val_list enum_val_list table_func_column_list
 				create_generic_options alter_generic_options
 				relation_expr_list dostmt_opt_list
@@ -15610,8 +15612,15 @@ opt_conf_expr:
 		;
 
 returning_clause:
-			RETURNING target_list		{ $$ = $2; }
-			| /* EMPTY */				{ $$ = NIL; }
+			RETURNING target_list
+				{
+					ReturningClause *n = makeNode(ReturningClause);
+
+					n->options = NIL;
+					n->exprs = $2;
+					$$ = n;
+				}
+			| /* EMPTY */				{ $$ = NULL; }
 		;
 
 
@@ -15639,7 +15648,7 @@ DeleteStmt: with_clause DELETE_P delete_options FROM relation_expr_opt_alias usi
                         }
                     }
 					mysqlApplyDmlOrderLimit(n->relation, &n->whereClause, $8, $9);
-					n->returningClause = NULL /* was: $10, PG18 changed to ReturningClause* */;
+					n->returningClause = $10;
 					n->withClause = $1;
 					$$ = (Node *)n;
 				}
@@ -15660,7 +15669,7 @@ DeleteStmt: with_clause DELETE_P delete_options FROM relation_expr_opt_alias usi
                         }
                     }
 					mysqlApplyDmlOrderLimit(n->relation, &n->whereClause, $7, $8);
-					n->returningClause = NULL /* was: $9, PG18 changed to ReturningClause* */;
+					n->returningClause = $9;
 					n->withClause = NULL;
 					$$ = (Node *)n;
 				}
@@ -15914,7 +15923,7 @@ MysUpdateStmt:
                         }
                     }
 					mysqlApplyDmlOrderLimit(n->relation, &n->whereClause, $8, $9);
-                    n->returningClause = NULL /* was: $10, PG18 changed to ReturningClause* */;
+                    n->returningClause = $10;
                     n->withClause = NULL;
 
 					$$ = (Node *)n;

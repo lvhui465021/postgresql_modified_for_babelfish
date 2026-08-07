@@ -78,6 +78,17 @@ extern void *mysql_packet_get_auth_state(MysPacketState *ps);
 extern void mysql_packet_set_client_caps(MysPacketState *ps, uint32 caps);
 extern uint32 mysql_packet_get_client_caps(MysPacketState *ps);
 
+/*
+ * Store / retrieve the client's declared max_packet_size (from
+ * HandshakeResponse41).  This is the maximum-size packet the client says
+ * it is willing to receive; historically treated by MySQL server
+ * implementations as an informational hint rather than a hard outbound
+ * constraint (the server's own mysql_max_allowed_packet governs what it is
+ * willing to produce), but it must at least be decoded correctly.
+ */
+extern void mysql_packet_set_max_packet_size(MysPacketState *ps, uint32 size);
+extern uint32 mysql_packet_get_max_packet_size(MysPacketState *ps);
+
 /* Store / retrieve FOUND_ROWS() session counter. */
 extern void mysql_packet_set_found_rows(MysPacketState *ps, uint64 count);
 extern uint64 mysql_packet_get_found_rows(MysPacketState *ps);
@@ -91,6 +102,19 @@ extern void mysql_packet_set_last_insert_id(MysPacketState *ps, uint64 value);
 extern uint64 mysql_packet_get_last_insert_id(MysPacketState *ps);
 extern void mysql_packet_set_row_count(MysPacketState *ps, uint64 count);
 extern uint64 mysql_packet_get_row_count(MysPacketState *ps);
+
+/*
+ * Track NOTICE/WARNING/INFO messages suppressed by mysql_send_error() (the
+ * MySQL wire protocol has no independent notice frame -- these are folded
+ * into the warning-count field of the next OK/EOF completion packet
+ * instead).  mysql_packet_add_warning() increments the count; the
+ * completion-packet sender reads it via mysql_packet_get_warning_count()
+ * and must call mysql_packet_reset_warning_count() afterward so the count
+ * doesn't leak into the next statement.
+ */
+extern void mysql_packet_add_warning(MysPacketState *ps);
+extern uint32 mysql_packet_get_warning_count(MysPacketState *ps);
+extern void mysql_packet_reset_warning_count(MysPacketState *ps);
 
 /*
  * MySQL capability flags (subset relevant to our adapter).

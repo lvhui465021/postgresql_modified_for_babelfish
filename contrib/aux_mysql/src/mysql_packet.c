@@ -33,10 +33,16 @@ struct MysPacketState
     uint8       server_seq;         /* next server sequence number to send     */
     void       *auth_state;         /* MysAuthState during handshake, else NULL */
     uint32      client_capabilities; /* client capability flags from login     */
+    uint32      client_max_packet_size; /* client's declared max_packet_size,
+                                          * 0 if the client didn't send one or
+                                          * declared no limit               */
     uint64      found_rows;         /* FOUND_ROWS() session counter            */
     bool        result_set_started;  /* true once column metadata has been sent */
     uint64      last_insert_id;     /* LAST_INSERT_ID() session value          */
     uint64      row_count;          /* ROW_COUNT() session value (-1 = unset)  */
+    uint32      warning_count;      /* NOTICE/WARNING/INFO suppressed since the
+                                      * last completion packet; surfaced in the
+                                      * OK/EOF warning-count field, then reset */
 };
 
 /* ----------------------------------------------------------------
@@ -140,6 +146,20 @@ mysql_packet_read(MysPacketState *ps, char **payload, size_t *len)
                             mysql_max_allowed_packet)));
             if (buf != NULL)
                 pfree(buf);
+
+            /*
+             * Tell the client why we're about to hang up instead of just
+             * dropping the connection: real MySQL servers respond to an
+             * over-limit packet with ER_NET_PACKET_TOO_LARGE (1153) before
+             * closing, so well-behaved drivers can distinguish "packet too
+             * large" from a generic lost connection instead of retrying a
+             * doomed request.  The header for this fragment was already
+             * validated and consumed above, so ps->seq is the correct next
+             * sequence number for our response.
+             */
+            ps->server_seq = ps->seq;
+            mysql_packet_write_err(ps, 1153, "08S01",
+                                   "Got a packet bigger than 'max_allowed_packet' bytes");
             return false;
         }
         if (buf == NULL)
@@ -405,6 +425,21 @@ mysql_packet_get_client_caps(MysPacketState *ps)
 }
 
 void
+mysql_packet_set_max_packet_size(MysPacketState *ps, uint32 size)
+{
+    if (ps != NULL)
+        ps->client_max_packet_size = size;
+}
+
+uint32
+mysql_packet_get_max_packet_size(MysPacketState *ps)
+{
+    if (ps != NULL)
+        return ps->client_max_packet_size;
+    return 0;
+}
+
+void
 mysql_packet_set_found_rows(MysPacketState *ps, uint64 count)
 {
     if (ps != NULL)
@@ -462,4 +497,26 @@ mysql_packet_get_row_count(MysPacketState *ps)
     if (ps != NULL)
         return ps->row_count;
     return 0;
+}
+
+void
+mysql_packet_add_warning(MysPacketState *ps)
+{
+    if (ps != NULL && ps->warning_count < PG_UINT32_MAX)
+        ps->warning_count++;
+}
+
+uint32
+mysql_packet_get_warning_count(MysPacketState *ps)
+{
+    if (ps != NULL)
+        return ps->warning_count;
+    return 0;
+}
+
+void
+mysql_packet_reset_warning_count(MysPacketState *ps)
+{
+    if (ps != NULL)
+        ps->warning_count = 0;
 }

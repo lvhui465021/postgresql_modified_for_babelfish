@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_query_advanced
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_query_advanced
@@ -323,6 +323,6 @@ Query OK, 0 rows affected
 DROP DATABASE mysql_compat_query_advanced
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

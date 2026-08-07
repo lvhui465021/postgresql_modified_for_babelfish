@@ -35,7 +35,7 @@ packet_and_charset_variables	1
 DROP DATABASE IF EXISTS mysql_compat_session
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_session
@@ -256,7 +256,7 @@ transaction_commit	1
 DROP DATABASE mysql_compat_session
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 SELECT 'database_cleanup' AS test_name,

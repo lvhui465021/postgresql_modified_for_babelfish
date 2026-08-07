@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_ddl
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_ddl
@@ -289,13 +289,13 @@ on_update_current_timestamp	1
 ALTER TABLE mysql_ddl_types ALGORITHM=INPLACE
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 ALTER TABLE mysql_ddl_types COMMENT='altered table comment' ALGORITHM=INPLACE
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 ALTER TABLE mysql_ddl_types ADD COLUMN alter_value INT DEFAULT 7
@@ -438,6 +438,6 @@ foreign_key_delete_actions	1
 DROP DATABASE mysql_compat_ddl
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

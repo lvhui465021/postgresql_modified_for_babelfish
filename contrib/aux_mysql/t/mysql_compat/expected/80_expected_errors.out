@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_expected_errors
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_expected_errors
@@ -85,6 +85,6 @@ ERROR 1049 (42000) at line 23: Unknown database 'mysql_compat_database_does_not_
 DROP DATABASE mysql_compat_expected_errors
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

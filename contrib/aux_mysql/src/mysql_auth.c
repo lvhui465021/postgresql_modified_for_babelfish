@@ -315,6 +315,65 @@ parse_client_capabilities(const char *payload, size_t len,
 }
 
 /* ----------------------------------------------------------------
+ *    mysql_read_lenenc_uint
+ *
+ * Decode one MySQL length-encoded integer starting at **pp (with
+ * *premaining bytes available), advancing *pp / *premaining past the
+ * encoded value on success.  Mirrors mys_stmt_read_lenenc() in
+ * mysql_stmt.c, adapted to this function's pointer/remaining-count
+ * parsing style instead of StringInfo.
+ *
+ * Returns false (leaving *pp / *premaining untouched) if the buffer is
+ * too short to hold the encoding, or if the first byte is 0xfb (NULL
+ * marker) or 0xff (error marker) -- neither is valid at this position
+ * in a HandshakeResponse41 packet.
+ * ----------------------------------------------------------------
+ */
+static bool
+mysql_read_lenenc_uint(const char **pp, size_t *premaining, uint64 *value)
+{
+    const char *p = *pp;
+    size_t      remaining = *premaining;
+    uint8       first;
+    int         nbytes;
+    uint64      v;
+    int         i;
+
+    if (remaining < 1)
+        return false;
+    first = (uint8) *p;
+
+    if (first < 0xfb)
+    {
+        *value = first;
+        *pp = p + 1;
+        *premaining = remaining - 1;
+        return true;
+    }
+
+    if (first == 0xfc)
+        nbytes = 2;
+    else if (first == 0xfd)
+        nbytes = 3;
+    else if (first == 0xfe)
+        nbytes = 8;
+    else
+        return false;           /* 0xfb (NULL) / 0xff (error) not valid here */
+
+    if (remaining < (size_t) (1 + nbytes))
+        return false;
+
+    v = 0;
+    for (i = 0; i < nbytes; i++)
+        v |= ((uint64) (uint8) p[1 + i]) << (i * 8);
+
+    *value = v;
+    *pp = p + 1 + nbytes;
+    *premaining = remaining - 1 - nbytes;
+    return true;
+}
+
+/* ----------------------------------------------------------------
  *    mysql_verify_login
  *
  * Read login packet, verify mysql_native_password response against
@@ -380,9 +439,23 @@ mysql_verify_login(MysPacketState *ps, Port *port)
     pos_ptr += 4;
     remaining -= 4;
 
-    /* --- Max packet size (4 bytes) --- */
+    /*
+     * --- Max packet size (4 bytes, little-endian) ---
+     *
+     * Decode explicitly instead of memcpy()'ing into a native uint32: the
+     * wire value is always little-endian regardless of host byte order (see
+     * parse_client_capabilities() above for the same pattern applied to the
+     * capability flags).  This is the client's declared receive limit; we
+     * store it for informational use but MySQL server implementations
+     * historically treat it as a hint rather than an enforced outbound
+     * constraint (see mysql_packet_set_max_packet_size()).
+     */
     if (remaining < 4) { pfree(payload); return STATUS_ERROR; }
-    memcpy(&max_packet_size, pos_ptr, 4);
+    max_packet_size = ((uint32) (uint8) pos_ptr[0])
+                     | ((uint32) (uint8) pos_ptr[1] << 8)
+                     | ((uint32) (uint8) pos_ptr[2] << 16)
+                     | ((uint32) (uint8) pos_ptr[3] << 24);
+    mysql_packet_set_max_packet_size(ps, max_packet_size);
     pos_ptr += 4;
     remaining -= 4;
 
@@ -405,10 +478,41 @@ mysql_verify_login(MysPacketState *ps, Port *port)
         remaining -= ulen + 1;
     }
 
-    /* --- Auth response (length-encoded) --- */
-    if (remaining < 1) { pfree(payload); return STATUS_ERROR; }
+    /*
+     * --- Auth response ---
+     *
+     * The wire encoding of this field is chosen by the client according to
+     * which capability it actually set in the capability flags it just
+     * sent us (client_cap), not according to what the server advertised in
+     * the greeting:
+     *
+     *   CLIENT_PLUGIN_AUTH_LENENC set: length-encoded-integer length prefix
+     *     (0xfc/0xfd/0xfe multi-byte forms allowed), then that many bytes.
+     *   else CLIENT_SECURE_CONNECTION set: single uint8 length prefix, then
+     *     that many bytes (legacy Protocol::HandshakeResponse41 form).
+     *   else: legacy NUL-terminated string (pre-4.1 auth).
+     */
+    if (client_cap & CLIENT_PLUGIN_AUTH_LENENC)
     {
-        uint8 auth_len = (uint8) *pos_ptr;
+        uint64 auth_len64;
+
+        if (!mysql_read_lenenc_uint(&pos_ptr, &remaining, &auth_len64) ||
+            auth_len64 > remaining)
+        {
+            pfree(payload);
+            return STATUS_ERROR;
+        }
+        auth_response = pos_ptr;
+        auth_response_len = (size_t) auth_len64;
+        pos_ptr += auth_response_len;
+        remaining -= auth_response_len;
+    }
+    else if (client_cap & CLIENT_SECURE_CONNECTION)
+    {
+        uint8 auth_len;
+
+        if (remaining < 1) { pfree(payload); return STATUS_ERROR; }
+        auth_len = (uint8) *pos_ptr;
         pos_ptr += 1;
         remaining -= 1;
         if (remaining < auth_len) { pfree(payload); return STATUS_ERROR; }
@@ -416,6 +520,16 @@ mysql_verify_login(MysPacketState *ps, Port *port)
         auth_response_len = auth_len;
         pos_ptr += auth_len;
         remaining -= auth_len;
+    }
+    else
+    {
+        size_t alen = strnlen(pos_ptr, remaining);
+
+        if (alen >= remaining) { pfree(payload); return STATUS_ERROR; }
+        auth_response = pos_ptr;
+        auth_response_len = alen;
+        pos_ptr += alen + 1;
+        remaining -= alen + 1;
     }
 
     /* --- Schema name (NUL-terminated, if CLIENT_CONNECT_WITH_DB) --- */

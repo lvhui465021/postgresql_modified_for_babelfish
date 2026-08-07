@@ -123,7 +123,30 @@ BackendMain(const void *startup_data, size_t startup_data_len)
 	 */
 	MemoryContextSwitchTo(TopMemoryContext);
 
-	(MyProcPort->protocol_config->fn_mainfunc)(MyProcPort);
+	/*
+	 * Dispatch to the backend main loop.  ProtocolRoutine.mainfunc lets a
+	 * compatibility protocol replace the loop entirely; a NULL mainfunc
+	 * (the case for every protocol registered today, including MySQL,
+	 * which reuses PostgresMain via its read_command/process_command
+	 * hooks instead) means "use the standard PostgreSQL behaviour", per
+	 * the NULL-callback contract documented on ProtocolRoutine.  Without
+	 * this check, a future protocol that registers a mainfunc would never
+	 * actually have it called -- this file unconditionally ran the older,
+	 * Babelfish-native protocol_config->fn_mainfunc instead, exactly the
+	 * dispatch-missing bug class already fixed for ReportGUCOption
+	 * (guc.c), send_message_to_frontend (elog.c), and ProcessUtility
+	 * (utility.c).  TDS does not register a ProtocolRoutine, so
+	 * GetCurrentProtocolRoutine() returns the standard fallback routine
+	 * (mainfunc == NULL) for it too, preserving its existing behaviour.
+	 */
+	{
+		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
+
+		if (routine != NULL && routine->mainfunc != NULL)
+			routine->mainfunc(MyProcPort);
+		else
+			(MyProcPort->protocol_config->fn_mainfunc)(MyProcPort);
+	}
 }
 
 

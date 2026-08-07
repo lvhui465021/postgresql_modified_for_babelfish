@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_functions
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_functions
@@ -386,7 +386,7 @@ SELECT 'named_lock_free' AS test_name,
 
 test_name	passed
 named_lock_free	1
-1 row in set
+1 row in set, 1 warning
 
 --------------
 SELECT 'sleep_zero' AS test_name, mysql.sleep(0) = 0 AS passed
@@ -409,6 +409,6 @@ mysql_version_contract	1
 DROP DATABASE mysql_compat_functions
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

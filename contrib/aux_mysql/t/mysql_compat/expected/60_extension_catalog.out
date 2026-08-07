@@ -3,7 +3,7 @@
 DROP TEMPORARY TABLE IF EXISTS mysql_compat_required_api
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE TEMPORARY TABLE mysql_compat_required_api (

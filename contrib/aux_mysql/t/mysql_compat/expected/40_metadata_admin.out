@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_metadata
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_metadata
@@ -854,6 +854,6 @@ admin_commands_leave_table_usable	1
 DROP DATABASE mysql_compat_metadata
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

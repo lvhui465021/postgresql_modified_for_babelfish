@@ -27,7 +27,7 @@ Query OK, 0 rows affected
 DROP DATABASE IF EXISTS mysql_compat_known_metadata
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_known_metadata
@@ -76,6 +76,6 @@ ERROR 1064 (42000) at line 14: syntax error, multi table name or alias in set.
 DROP DATABASE mysql_compat_known_metadata
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

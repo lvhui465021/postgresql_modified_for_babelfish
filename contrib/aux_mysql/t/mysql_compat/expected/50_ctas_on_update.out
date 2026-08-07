@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_ctas
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_ctas
@@ -144,6 +144,6 @@ ctas_join_no_wrong_trigger	1
 DROP DATABASE mysql_compat_ctas
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

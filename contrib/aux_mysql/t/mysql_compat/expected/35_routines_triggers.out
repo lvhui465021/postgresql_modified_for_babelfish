@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_routines
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_routines
@@ -62,7 +62,7 @@ SELECT id, value_int, mysql_routine_add(value_int, 1) AS calculated
 FROM mysql_routine_log
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 SELECT 'routine_in_view' AS test_name,
@@ -118,6 +118,6 @@ routine_metadata	1
 DROP DATABASE mysql_compat_routines
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye

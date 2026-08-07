@@ -3,7 +3,7 @@
 DROP DATABASE IF EXISTS mysql_compat_ddl_advanced
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 CREATE DATABASE mysql_compat_ddl_advanced
@@ -143,7 +143,7 @@ Query OK, 0 rows affected
 ALTER TABLE mysql_adv_base RENAME INDEX mysql_adv_index_old TO mysql_adv_index_new
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 --------------
 SELECT 'rename_index' AS test_name,
@@ -253,6 +253,6 @@ drop_column	1
 DROP DATABASE mysql_compat_ddl_advanced
 --------------
 
-Query OK, 0 rows affected
+Query OK, 0 rows affected, 1 warning
 
 Bye
