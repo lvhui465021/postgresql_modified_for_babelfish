@@ -19148,10 +19148,26 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr LIKE a_expr
 				{
 					/*
-					 * MySQL LIKE is case-insensitive by default (collation
-					 * dependent).  Map to ILIKE (~~*) for MySQL semantics.
+					 * MySQL LIKE's case sensitivity is entirely a function
+					 * of the operand's collation, not the keyword itself
+					 * (e.g. utf8mb4_bin is case-sensitive, utf8mb4_general_ci
+					 * is not).  Map to plain LIKE (~~) rather than ILIKE:
+					 * mysql.~~ (bpcharlike, for CHAR) and the kernel's own
+					 * text ~~ (for VARCHAR/TEXT) both delegate to the
+					 * collation-aware matcher and inherit the right
+					 * semantics automatically.  Unconditionally mapping to
+					 * ILIKE (~~*) was wrong in both directions: it forced
+					 * case-insensitive matching even under a case-sensitive
+					 * collation like utf8mb4_bin, and it hard-errored under
+					 * a nondeterministic collation like
+					 * mysql.case_insensitive/utf8mb4_general_ci, because
+					 * PostgreSQL's own ILIKE implementation
+					 * (Generic_Text_IC_like) unconditionally rejects
+					 * nondeterministic collations -- a kernel limitation
+					 * that plain LIKE, which just defers to the collation
+					 * instead of forcing its own case folding, doesn't hit.
 					 */
-					$$ = (Node *) makeSimpleA_Expr(AEXPR_ILIKE, "~~*",
+					$$ = (Node *) makeSimpleA_Expr(AEXPR_LIKE, "~~",
 												   $1, $3, @2);
 				}
 			| a_expr LIKE a_expr ESCAPE a_expr					%prec LIKE
@@ -19160,12 +19176,12 @@ a_expr:		c_expr									{ $$ = $1; }
 											   list_make2($3, $5),
 											   COERCE_EXPLICIT_CALL,
 											   @2);
-					$$ = (Node *) makeSimpleA_Expr(AEXPR_ILIKE, "~~*",
+					$$ = (Node *) makeSimpleA_Expr(AEXPR_LIKE, "~~",
 												   $1, (Node *) n, @2);
 				}
 			| a_expr NOT_LA LIKE a_expr							%prec NOT_LA
 				{
-					$$ = (Node *) makeSimpleA_Expr(AEXPR_ILIKE, "!~~*",
+					$$ = (Node *) makeSimpleA_Expr(AEXPR_LIKE, "!~~",
 												   $1, $4, @2);
 				}
 			| a_expr NOT_LA LIKE a_expr ESCAPE a_expr			%prec NOT_LA
@@ -19174,7 +19190,7 @@ a_expr:		c_expr									{ $$ = $1; }
 											   list_make2($4, $6),
 											   COERCE_EXPLICIT_CALL,
 											   @2);
-					$$ = (Node *) makeSimpleA_Expr(AEXPR_ILIKE, "!~~*",
+					$$ = (Node *) makeSimpleA_Expr(AEXPR_LIKE, "!~~",
 												   $1, (Node *) n, @2);
 				}
 			| a_expr ILIKE a_expr

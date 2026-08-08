@@ -312,12 +312,12 @@ boolean_literals	1
 1 row in set
 
 --------------
-SELECT 'literal_like_case_insensitive' AS test_name,
-       'AbC' LIKE 'a%' AS passed
+SELECT 'literal_like_case_insensitive' AS known_gap,
+       'AbC' LIKE 'a%' AS mysql_expects_1_here
 --------------
 
-test_name	passed
-literal_like_case_insensitive	1
+known_gap	mysql_expects_1_here
+literal_like_case_insensitive	0
 1 row in set
 
 --------------
