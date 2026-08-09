@@ -19080,7 +19080,7 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr '/' a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "/", $1, $3, @2); }
 			| a_expr DIV a_expr
-				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "/", $1, $3, @2); }
+				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "//", $1, $3, @2); }
 			| a_expr '%' a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "%", $1, $3, @2); }
 			| a_expr MOD a_expr

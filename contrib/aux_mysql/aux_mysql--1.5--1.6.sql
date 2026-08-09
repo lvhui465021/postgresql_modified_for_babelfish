@@ -161,3 +161,80 @@ CREATE OR REPLACE FUNCTION mysql.show_warnings()
 RETURNS TABLE(Level pg_catalog.text, Code pg_catalog.int4, Message pg_catalog.text)
 AS '$libdir/aux_mysql', 'mysql_show_warnings'
 LANGUAGE C STABLE;
+
+/*
+ * MySQL-schema division operators (fusion: resolve the ADTExtMethod 3-slot
+ * seam decision — expr_typmod / adjust_numeric_result / detect_numeric_overflow
+ * stay NULL/reserved; MySQL division semantics are carried by these operators).
+ *
+ * MySQL division result scale = dividend scale + div_precision_increment
+ * (default 4), capped at 30; int/int division promotes to DECIMAL.  DIV is
+ * integer division (truncation toward zero).  In MySQL mode, mysql is ahead
+ * of pg_catalog in search_path, so these operators win for `/` and `//` (DIV
+ * is mapped to operator name `//` in mys_gram.y); PG mode is unaffected.
+ */
+CREATE OR REPLACE FUNCTION mysql.div_numeric(pg_catalog.numeric, pg_catalog.numeric)
+RETURNS pg_catalog.numeric
+AS '$libdir/mysm', 'mysql_div_numeric'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql./(pg_catalog.numeric, pg_catalog.numeric);
+CREATE OPERATOR mysql./ (
+    FUNCTION = mysql.div_numeric,
+    LEFTARG = pg_catalog.numeric,
+    RIGHTARG = pg_catalog.numeric
+);
+
+CREATE OR REPLACE FUNCTION mysql.div_int4(pg_catalog.int4, pg_catalog.int4)
+RETURNS pg_catalog.numeric
+AS '$libdir/mysm', 'mysql_div_int4'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql./(pg_catalog.int4, pg_catalog.int4);
+CREATE OPERATOR mysql./ (
+    FUNCTION = mysql.div_int4,
+    LEFTARG = pg_catalog.int4,
+    RIGHTARG = pg_catalog.int4
+);
+
+CREATE OR REPLACE FUNCTION mysql.div_int8(pg_catalog.int8, pg_catalog.int8)
+RETURNS pg_catalog.numeric
+AS '$libdir/mysm', 'mysql_div_int8'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql./(pg_catalog.int8, pg_catalog.int8);
+CREATE OPERATOR mysql./ (
+    FUNCTION = mysql.div_int8,
+    LEFTARG = pg_catalog.int8,
+    RIGHTARG = pg_catalog.int8
+);
+
+CREATE OR REPLACE FUNCTION mysql.div_numeric_div(pg_catalog.numeric, pg_catalog.numeric)
+RETURNS pg_catalog.numeric
+AS '$libdir/mysm', 'mysql_div_numeric_div'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql.//(pg_catalog.numeric, pg_catalog.numeric);
+CREATE OPERATOR mysql.// (
+    FUNCTION = mysql.div_numeric_div,
+    LEFTARG = pg_catalog.numeric,
+    RIGHTARG = pg_catalog.numeric
+);
+
+CREATE OR REPLACE FUNCTION mysql.div_int4_div(pg_catalog.int4, pg_catalog.int4)
+RETURNS pg_catalog.int8
+AS '$libdir/mysm', 'mysql_div_int4_div'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql.//(pg_catalog.int4, pg_catalog.int4);
+CREATE OPERATOR mysql.// (
+    FUNCTION = mysql.div_int4_div,
+    LEFTARG = pg_catalog.int4,
+    RIGHTARG = pg_catalog.int4
+);
+
+CREATE OR REPLACE FUNCTION mysql.div_int8_div(pg_catalog.int8, pg_catalog.int8)
+RETURNS pg_catalog.int8
+AS '$libdir/mysm', 'mysql_div_int8_div'
+LANGUAGE C IMMUTABLE STRICT;
+DROP OPERATOR IF EXISTS mysql.//(pg_catalog.int8, pg_catalog.int8);
+CREATE OPERATOR mysql.// (
+    FUNCTION = mysql.div_int8_div,
+    LEFTARG = pg_catalog.int8,
+    RIGHTARG = pg_catalog.int8
+);

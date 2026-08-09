@@ -32,6 +32,7 @@
 #include "utils/numeric.h"
 #include "utils/timestamp.h"
 #include "utils/varbit.h"
+#include "utils/fmgrprotos.h"
 #include "varatt.h"
 #include "commands/mysql/mys_uservar.h"
 
@@ -3709,21 +3710,21 @@ AppendSeconds(char *cp, int sec, fsec_t fsec, int precision, bool fillzeros)
 		return cp;
 }
 
-//static Datum 
+//static Datum
 //convertByteaToInt2(Datum val)
 //{
 //    // TODO:
 //    return NULL;
 //}
 //
-//static Datum 
+//static Datum
 //convertByteaToInt4(Datum val)
 //{
 //    // TODO:
 //    return NULL;
 //}
 //
-//static Datum 
+//static Datum
 //convertByteaToInt8(Datum val)
 //{
 //    // TODO:
@@ -3750,3 +3751,198 @@ AppendSeconds(char *cp, int sec, fsec_t fsec, int precision, bool fillzeros)
 //    // TODO:
 //    return NULL;
 //}
+
+/*
+ * MySQL-schema division operators.
+ *
+ * These implement the MySQL DECIMAL division semantics that the ADTExtMethod
+ * slots expr_typmod / adjust_numeric_result / detect_numeric_overflow were
+ * initially (and wrongly) considered for: MySQL's division result scale is
+ * "dividend scale + div_precision_increment (default 4)", capped at 30, and
+ * int/int division promotes to DECIMAL instead of returning the integer
+ * quotient.  The vtable seam was rejected (executor hot path, would need a
+ * full typmod-inference engine); the operators are the chosen replacement.
+ * The 3 ADT slots stay NULL (reserved) and check_mysql_vtable_contract.sh
+ * stays green.
+ *
+ * These operators live in the mysql schema, which MySQL mode places before
+ * pg_catalog in search_path, so MySQL-mode arithmetic resolves to them while
+ * PG mode keeps the standard pg_catalog operators untouched.
+ */
+
+#define MYSQL_DIV_PRECISION_INCREMENT 4		/* MySQL div_precision_increment default */
+#define MYSQL_DIV_MAX_SCALE 30				/* MySQL DECIMAL_MAX_SCALE */
+
+/*
+ * MySQL division result scale: dividend scale + div_precision_increment,
+ * capped at 30 (MySQL's DECIMAL_MAX_SCALE).
+ */
+static int
+mysql_div_result_scale(Numeric num1)
+{
+	int			dscale1;
+	int			rscale;
+
+	dscale1 = DatumGetInt32(DirectFunctionCall1(numeric_scale,
+												NumericGetDatum(num1)));
+	rscale = dscale1 + MYSQL_DIV_PRECISION_INCREMENT;
+	if (rscale > MYSQL_DIV_MAX_SCALE)
+		rscale = MYSQL_DIV_MAX_SCALE;
+	return rscale;
+}
+
+/*
+ * numeric / numeric -> numeric with MySQL result-scale semantics.
+ */
+PG_FUNCTION_INFO_V1(mysql_div_numeric);
+Datum
+mysql_div_numeric(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		result;
+	bool		have_error = false;
+	int			rscale;
+
+	result = numeric_div_opt_error(num1, num2, &have_error);
+	if (have_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	rscale = mysql_div_result_scale(num1);
+	result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+												 NumericGetDatum(result),
+												 Int32GetDatum(rscale)));
+	PG_RETURN_NUMERIC(result);
+}
+
+/*
+ * int4 / int4 -> numeric: MySQL promotes integer division to DECIMAL.
+ * Dividend scale is 0, so the result scale is 0 + 4 = 4 (5/2 = 2.5000).
+ */
+PG_FUNCTION_INFO_V1(mysql_div_int4);
+Datum
+mysql_div_int4(PG_FUNCTION_ARGS)
+{
+	int32		arg1 = PG_GETARG_INT32(0);
+	int32		arg2 = PG_GETARG_INT32(1);
+	Numeric		num1;
+	Numeric		num2;
+	Numeric		result;
+	bool		have_error = false;
+
+	if (arg2 == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	num1 = int64_to_numeric((int64) arg1);
+	num2 = int64_to_numeric((int64) arg2);
+	result = numeric_div_opt_error(num1, num2, &have_error);
+	if (have_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+												 NumericGetDatum(result),
+												 Int32GetDatum(MYSQL_DIV_PRECISION_INCREMENT)));
+	PG_RETURN_NUMERIC(result);
+}
+
+/*
+ * int8 / int8 -> numeric: MySQL promotes integer division to DECIMAL.
+ */
+PG_FUNCTION_INFO_V1(mysql_div_int8);
+Datum
+mysql_div_int8(PG_FUNCTION_ARGS)
+{
+	int64		arg1 = PG_GETARG_INT64(0);
+	int64		arg2 = PG_GETARG_INT64(1);
+	Numeric		num1;
+	Numeric		num2;
+	Numeric		result;
+	bool		have_error = false;
+
+	if (arg2 == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	num1 = int64_to_numeric(arg1);
+	num2 = int64_to_numeric(arg2);
+	result = numeric_div_opt_error(num1, num2, &have_error);
+	if (have_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+												 NumericGetDatum(result),
+												 Int32GetDatum(MYSQL_DIV_PRECISION_INCREMENT)));
+	PG_RETURN_NUMERIC(result);
+}
+
+/*
+ * numeric DIV numeric -> numeric: MySQL DIV discards the fractional part of
+ * the quotient (truncation toward zero).
+ */
+PG_FUNCTION_INFO_V1(mysql_div_numeric_div);
+Datum
+mysql_div_numeric_div(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		result;
+	bool		have_error = false;
+
+	result = numeric_div_opt_error(num1, num2, &have_error);
+	if (have_error)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	result = DatumGetNumeric(DirectFunctionCall2(numeric_trunc,
+												 NumericGetDatum(result),
+												 Int32GetDatum(0)));
+	PG_RETURN_NUMERIC(result);
+}
+
+/*
+ * int4 DIV int4 -> int8: MySQL integer DIV returns the truncated (toward
+ * zero) integer quotient.
+ */
+PG_FUNCTION_INFO_V1(mysql_div_int4_div);
+Datum
+mysql_div_int4_div(PG_FUNCTION_ARGS)
+{
+	int32		arg1 = PG_GETARG_INT32(0);
+	int32		arg2 = PG_GETARG_INT32(1);
+
+	if (arg2 == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	PG_RETURN_INT64((int64) arg1 / (int64) arg2);
+}
+
+/*
+ * int8 DIV int8 -> int8: MySQL integer DIV returns the truncated (toward
+ * zero) integer quotient.
+ */
+PG_FUNCTION_INFO_V1(mysql_div_int8_div);
+Datum
+mysql_div_int8_div(PG_FUNCTION_ARGS)
+{
+	int64		arg1 = PG_GETARG_INT64(0);
+	int64		arg2 = PG_GETARG_INT64(1);
+
+	if (arg2 == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DIVISION_BY_ZERO),
+				 errmsg("division by zero")));
+
+	PG_RETURN_INT64(arg1 / arg2);
+}

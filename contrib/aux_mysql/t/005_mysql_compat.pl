@@ -90,6 +90,18 @@ WHERE usename = 'test';
 });
 is($pw_check, 't', 'test role uses mysql_native_password');
 
+# --- PG mode keeps standard integer division ---------------------------
+# The mysql./ and mysql.// division operators live in the mysql schema,
+# which is only ahead of pg_catalog inside MySQL-protocol sessions
+# (mysql_session_initialize sets search_path).  A plain psql connection
+# must still resolve 5/2 to pg_catalog int4div (=> 2), proving the
+# MySQL-schema operators do not leak into PG mode.
+my $pg_division = $node->safe_psql(
+    'postgres', q{
+SELECT 5 / 2;
+});
+is($pg_division, '2', 'PG mode: 5/2 remains integer division');
+
 # --- wait for MySQL listener -------------------------------------------
 sub run_mysql {
     my ($sql) = @_;

@@ -116,4 +116,19 @@ SELECT 'boolean_literals' AS test_name,
 SELECT 'literal_like_case_insensitive' AS known_gap,
        'AbC' LIKE 'a%' AS mysql_expects_1_here;
 
+
+-- MySQL division semantics (mysql-schema operators; the ADTExtMethod
+-- expr_typmod/adjust_numeric_result/detect_numeric_overflow slots stay
+-- NULL/reserved -- division is carried by mysql./ and mysql.// operators).
+SELECT 'division_int4_int4' AS test_name,
+       (5 / 2) = 2.5000 AND (7 / 2) = 3.5000 AND (1 / 3) = 0.3333 AS passed;
+SELECT 'division_int8_int8' AS test_name,
+       (5000000000 / 2) = 2500000000.0000 AS passed;
+SELECT 'division_numeric_scale' AS test_name,
+       (10.00 / 4) = 2.500000 AND (CAST(100 AS DECIMAL(10,2)) / 8) = 12.500000 AS passed;
+SELECT 'division_div_int' AS test_name,
+       (5 DIV 2) = 2 AND (7 DIV 2) = 3 AND (10 DIV 3) = 3 AS passed;
+SELECT 'division_div_numeric' AS test_name,
+       (10.5 DIV 2) = 5 AND (CAST(100 AS DECIMAL(10,2)) DIV 8) = 12 AS passed;
+
 DROP DATABASE mysql_compat_dml;
