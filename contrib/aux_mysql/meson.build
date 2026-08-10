@@ -59,6 +59,7 @@ tests += {
     'tests': [
       't/005_mysql_compat.pl',
       't/006_pg_dump_restore.pl',
+      't/007_mysql_parallel.pl',
     ],
   },
 }

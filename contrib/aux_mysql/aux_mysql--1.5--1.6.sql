@@ -176,7 +176,7 @@ LANGUAGE C STABLE;
 CREATE OR REPLACE FUNCTION mysql.div_numeric(pg_catalog.numeric, pg_catalog.numeric)
 RETURNS pg_catalog.numeric
 AS '$libdir/mysm', 'mysql_div_numeric'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql./(pg_catalog.numeric, pg_catalog.numeric);
 CREATE OPERATOR mysql./ (
     FUNCTION = mysql.div_numeric,
@@ -187,7 +187,7 @@ CREATE OPERATOR mysql./ (
 CREATE OR REPLACE FUNCTION mysql.div_int4(pg_catalog.int4, pg_catalog.int4)
 RETURNS pg_catalog.numeric
 AS '$libdir/mysm', 'mysql_div_int4'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql./(pg_catalog.int4, pg_catalog.int4);
 CREATE OPERATOR mysql./ (
     FUNCTION = mysql.div_int4,
@@ -198,7 +198,7 @@ CREATE OPERATOR mysql./ (
 CREATE OR REPLACE FUNCTION mysql.div_int8(pg_catalog.int8, pg_catalog.int8)
 RETURNS pg_catalog.numeric
 AS '$libdir/mysm', 'mysql_div_int8'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql./(pg_catalog.int8, pg_catalog.int8);
 CREATE OPERATOR mysql./ (
     FUNCTION = mysql.div_int8,
@@ -209,7 +209,7 @@ CREATE OPERATOR mysql./ (
 CREATE OR REPLACE FUNCTION mysql.div_numeric_div(pg_catalog.numeric, pg_catalog.numeric)
 RETURNS pg_catalog.numeric
 AS '$libdir/mysm', 'mysql_div_numeric_div'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql.//(pg_catalog.numeric, pg_catalog.numeric);
 CREATE OPERATOR mysql.// (
     FUNCTION = mysql.div_numeric_div,
@@ -220,7 +220,7 @@ CREATE OPERATOR mysql.// (
 CREATE OR REPLACE FUNCTION mysql.div_int4_div(pg_catalog.int4, pg_catalog.int4)
 RETURNS pg_catalog.int8
 AS '$libdir/mysm', 'mysql_div_int4_div'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql.//(pg_catalog.int4, pg_catalog.int4);
 CREATE OPERATOR mysql.// (
     FUNCTION = mysql.div_int4_div,
@@ -231,7 +231,7 @@ CREATE OPERATOR mysql.// (
 CREATE OR REPLACE FUNCTION mysql.div_int8_div(pg_catalog.int8, pg_catalog.int8)
 RETURNS pg_catalog.int8
 AS '$libdir/mysm', 'mysql_div_int8_div'
-LANGUAGE C IMMUTABLE STRICT;
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 DROP OPERATOR IF EXISTS mysql.//(pg_catalog.int8, pg_catalog.int8);
 CREATE OPERATOR mysql.// (
     FUNCTION = mysql.div_int8_div,
