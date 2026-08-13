@@ -12,8 +12,9 @@ set -euo pipefail
 
 K=$(cd "$(dirname "$0")" && pwd)
 cd "$K"
-PERLLIBDIR="$K/inst/lib/x86_64-linux-gnu/pgxs/src/test/perl"
-export PGBIN="$K/inst/bin"
+PREFIX="${PREFIX:-$K/inst}"
+PERLLIBDIR="$PREFIX/lib/x86_64-linux-gnu/pgxs/src/test/perl"
+export PGBIN="$PREFIX/bin"
 export PG_REGRESS="$K/build/src/test/regress/pg_regress"
 export PATH="$PGBIN:$PATH"
 # Keep the local PGXS TAP modules first; allow callers to prepend their own
