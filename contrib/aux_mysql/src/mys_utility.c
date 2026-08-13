@@ -314,6 +314,8 @@ static bool MysApplySqlModeAssignment(Node *assignment);
 static bool MysApplyTimeZoneAssignment(Node *assignment);
 static bool MysApplyGlobalTimeZoneAssignment(Node *assignment);
 static const char *MysStringAssignmentValue(Node *arg);
+static const char *MysIsoLevelToPg(const char *mysval);
+static void MysSetTransactionIsolationGUC(const char *pg_guc_name, Node *arg, bool is_local);
 
 
 void
@@ -393,9 +395,9 @@ mys_standard_ProcessUtility(PlannedStmt *pstmt,
 								DefElem    *item = (DefElem *) lfirst(lc);
 
 								if (strcmp(item->defname, "transaction_isolation") == 0)
-									SetPGVariable("transaction_isolation",
-												  list_make1(item->arg),
-												  true);
+									MysSetTransactionIsolationGUC("transaction_isolation",
+																  item->arg,
+																  true);
 								else if (strcmp(item->defname, "transaction_read_only") == 0)
 									SetPGVariable("transaction_read_only",
 												  list_make1(item->arg),
@@ -2148,6 +2150,76 @@ MysApplyGlobalTimeZoneAssignment(Node *assignment)
 	return found;
 }
 
+/*
+ * MysIsoLevelToPg
+ *
+ * The MySQL grammar's iso_level rule (mys_gram.y) yields MySQL's display
+ * format ("READ-COMMITTED"); PostgreSQL's transaction_isolation /
+ * default_transaction_isolation GUCs only accept "read committed" style.
+ * Convert at this boundary rather than changing iso_level itself, since the
+ * MySQL-format string is what @@transaction_isolation, the base_variables
+ * catalog, and the SystemVar display mapping all expect elsewhere.
+ *
+ * Returns NULL when mysval is not a recognized isolation level, so the
+ * caller can fall through to PostgreSQL's own GUC error reporting instead
+ * of silently swallowing a typo.
+ */
+static const char *
+MysIsoLevelToPg(const char *mysval)
+{
+	if (pg_strcasecmp(mysval, "READ-UNCOMMITTED") == 0)
+		return "read uncommitted";
+	if (pg_strcasecmp(mysval, "READ-COMMITTED") == 0)
+		return "read committed";
+	if (pg_strcasecmp(mysval, "REPEATABLE-READ") == 0)
+		return "repeatable read";
+	if (pg_strcasecmp(mysval, "SERIALIZABLE") == 0)
+		return "serializable";
+	return NULL;
+}
+
+/*
+ * MysSetTransactionIsolationGUC
+ *
+ * Shared by the BEGIN/START TRANSACTION ISOLATION LEVEL handling and the
+ * SET SESSION TRANSACTION ISOLATION LEVEL handling: both need to take an
+ * isolation-level A_Const carrying MySQL's display-format string, convert
+ * it to PostgreSQL's format, and apply it to the named GUC.
+ *
+ * arg is not modified in place -- the parse tree backing it may be cached
+ * and reused across executions, so a fresh A_Const is built for the
+ * converted value.  If arg does not hold a recognized isolation-level
+ * string, it is passed through unconverted so SetPGVariable's own error
+ * reporting fires instead of this function inventing its own message.
+ */
+static void
+MysSetTransactionIsolationGUC(const char *pg_guc_name, Node *arg, bool is_local)
+{
+	const char *pgval = NULL;
+
+	if (IsA(arg, A_Const))
+	{
+		A_Const    *constant = castNode(A_Const, arg);
+
+		if (!constant->isnull && IsA(&constant->val, String))
+			pgval = MysIsoLevelToPg(strVal(&constant->val));
+	}
+
+	if (pgval != NULL)
+	{
+		A_Const    *con = makeNode(A_Const);
+
+		con->val.sval.type = T_String;
+		con->val.sval.sval = pstrdup(pgval);
+		con->isnull = false;
+		con->location = -1;
+
+		SetPGVariable(pg_guc_name, list_make1(con), is_local);
+	}
+	else
+		SetPGVariable(pg_guc_name, list_make1(arg), is_local);
+}
+
 static void
 MysValidateUseDatabase(VariableSetStmt *stmt)
 {
@@ -2181,6 +2253,42 @@ static void
 MysExecSetVariableStmt(ParseState *pstate, VariableSetStmt *n, ParamListInfo params, bool isTopLevel)
 {
     ListCell   *lc;
+
+    /*
+     * SET SESSION TRANSACTION ISOLATION LEVEL x / READ ONLY / READ WRITE.
+     * mys_gram.y encodes this as n->args = a List of DefElem (the parsed
+     * transaction_mode_list), not the SelectStmt-wrapped shape the rest of
+     * this function handles -- mirror the BEGIN/START TRANSACTION handling
+     * in mys_ProcessUtility() above, but target the default_* GUCs so the
+     * setting persists for the whole session rather than just the next
+     * transaction.
+     *
+     * mysql._set_transaction (bare SET TRANSACTION, next-transaction-only
+     * scope) and mysql._set_global_transaction (cluster-wide default for
+     * future sessions) are deliberately left as no-ops here: neither has a
+     * ready PostgreSQL equivalent reachable from a single session-scoped
+     * SQL statement. See FUSION_PLAN.md P2-10 / P2-10_FIX_SPEC.md section 5
+     * (items A and B) before wiring either up.
+     */
+    if (n->name != NULL &&
+        strcmp(n->name, "mysql._set_session_transaction") == 0)
+    {
+        foreach(lc, n->args)
+        {
+            DefElem    *item = (DefElem *) lfirst(lc);
+
+            if (strcmp(item->defname, "transaction_isolation") == 0)
+                MysSetTransactionIsolationGUC("default_transaction_isolation",
+                                              item->arg,
+                                              false);
+            else if (strcmp(item->defname, "transaction_read_only") == 0)
+                SetPGVariable("default_transaction_read_only",
+                              list_make1(item->arg),
+                              false);
+            /* transaction_deferrable: MySQL has no such concept; skip. */
+        }
+        return;
+    }
 
     foreach(lc, n->args)
     {

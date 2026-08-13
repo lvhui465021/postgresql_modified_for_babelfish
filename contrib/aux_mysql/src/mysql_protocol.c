@@ -861,6 +861,21 @@ mysql_session_initialize(Port *port)
     MysSetAutocommit(true);
 	MysInitSessionTimeZone();
 	/*
+	 * MySQL's own default transaction isolation level is REPEATABLE READ
+	 * (InnoDB's default since MySQL 5.x, unchanged through 8.4); the
+	 * instance-wide default_transaction_isolation stays PostgreSQL's own
+	 * "read committed" (SQL Server's default too, confirmed empirically
+	 * against a real T-SQL connection -- see FUSION_PLAN.md P2-16), so PG
+	 * and TDS connections are untouched by this.  Session-scoped only
+	 * (PGC_S_SESSION), same as the search_path override below: a MySQL
+	 * client that never issues its own SET SESSION TRANSACTION ISOLATION
+	 * LEVEL now still gets MySQL-correct semantics, without editing the
+	 * shared postgresql.conf default that every protocol reads.
+	 */
+	(void) set_config_option("default_transaction_isolation", "repeatable read",
+							 PGC_USERSET, PGC_S_SESSION,
+							 GUC_ACTION_SET, true, 0, false);
+	/*
 	 * Align search_path with openHalo's adapter.c for MySQL connections.
 	 *
 	 * openHalo sets:

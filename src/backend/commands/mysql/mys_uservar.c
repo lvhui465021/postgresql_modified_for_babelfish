@@ -45,6 +45,7 @@ static Datum bitstring2bytea(char *bitstring, bool isDigit);
 static Datum boolstring2bytea(char *boolstring, bool isDigit);
 static Datum cstring2bytea(char *cstring, bool isDigit);
 static bytea *copyUserVarValue(bytea *varValue);
+static const char *MysIsoLevelToMysql(const char *pgval);
 
 PG_FUNCTION_INFO_V1(mys_get_user_var);
 PG_FUNCTION_INFO_V1(mys_set_user_var);
@@ -93,6 +94,34 @@ mys_get_global_time_zone(PG_FUNCTION_ARGS)
 
 	pfree(value);
 	PG_RETURN_TEXT_P(result);
+}
+
+/*
+ * MysIsoLevelToMysql
+ *
+ * Reverse of the aux_mysql extension's MysIsoLevelToPg (mys_utility.c):
+ * translates PostgreSQL's transaction_isolation / default_transaction_
+ * isolation GUC value ("read committed" style) to MySQL's @@transaction_
+ * isolation display format ("READ-COMMITTED" style).  Not shared code with
+ * that function -- this file compiles into the kernel, mys_utility.c
+ * compiles into the separately-loaded aux_mysql extension, so there is no
+ * common translation unit to place a single shared helper in.
+ *
+ * Returns NULL for an unrecognized PG value, in which case the caller
+ * falls back to returning the raw GUC value rather than losing it.
+ */
+static const char *
+MysIsoLevelToMysql(const char *pgval)
+{
+	if (pg_strcasecmp(pgval, "read uncommitted") == 0)
+		return "READ-UNCOMMITTED";
+	if (pg_strcasecmp(pgval, "read committed") == 0)
+		return "READ-COMMITTED";
+	if (pg_strcasecmp(pgval, "repeatable read") == 0)
+		return "REPEATABLE-READ";
+	if (pg_strcasecmp(pgval, "serializable") == 0)
+		return "SERIALIZABLE";
+	return NULL;
 }
 
 Datum
@@ -154,6 +183,32 @@ mys_get_system_variable(PG_FUNCTION_ARGS)
 
 		pfree(name);
 		PG_RETURN_TEXT_P(cstring_to_text(tz));
+	}
+
+	/*
+	 * transaction_isolation resolves through the real GUC rather than the
+	 * extension catalog: base_variables seeds a fixed 'REPEATABLE-READ' that
+	 * has no connection to the backend's actual isolation level, which made
+	 * @@transaction_isolation actively misleading (it claimed REPEATABLE-READ
+	 * while the cluster ran at read committed).  Mirrors the time_zone
+	 * handling above.  MySQL's @@transaction_isolation reports the *session*
+	 * variable, not the current transaction's override, so this maps to
+	 * default_transaction_isolation.  global.transaction_isolation is
+	 * deliberately NOT special-cased here: GLOBAL scope isn't wired up on
+	 * the write side (see FUSION_PLAN.md P2-10 / P2-10_FIX_SPEC.md section 5
+	 * item B), and reading a real value for a setting that can't actually be
+	 * set would be worse than the existing "not implemented" behaviour.
+	 */
+	if (pg_strcasecmp(name, "transaction_isolation") == 0 ||
+		pg_strcasecmp(name, "session.transaction_isolation") == 0 ||
+		pg_strcasecmp(name, "local.transaction_isolation") == 0)
+	{
+		const char *pgval = GetConfigOption("default_transaction_isolation",
+											 false, false);
+		const char *mysval = MysIsoLevelToMysql(pgval);
+
+		pfree(name);
+		PG_RETURN_TEXT_P(cstring_to_text(mysval != NULL ? mysval : pgval));
 	}
 
 	/*
