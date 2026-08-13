@@ -4474,8 +4474,8 @@ BEGIN
     ret := pg_catalog.concat('CREATE ALGORITHM=UNDEFINED DEFINER=`', definer, '`@`%` SQL SECURITY DEFINER VIEW `', vwName, '` AS ');
 
     definition_ = pg_catalog.replace(definition_, '+', ' ');
-    definition_ = pg_catalog.replace(definition_, '\n', ' ');
-    definition_ = pg_catalog.replace(definition_, '\r', ' ');
+    definition_ = pg_catalog.replace(definition_, E'\n', ' ');
+    definition_ = pg_catalog.replace(definition_, E'\r', ' ');
     definition_ = pg_catalog.replace(definition_, ',', ' ');
     definition_ = pg_catalog.replace(definition_, ';', '');
     sections := string_to_array(definition_, ' ');
@@ -4828,9 +4828,9 @@ BEGIN
     LOOP
         if (0 < records.attnum) then
             if (0 < columnIndex) then
-                ret := pg_catalog.concat(ret, ',\n  ');
+                ret := pg_catalog.concat(ret, E',\n  ');
             else
-                ret := pg_catalog.concat(ret, '\n  ');
+                ret := pg_catalog.concat(ret, E'\n  ');
             end if;
 
             ret := pg_catalog.concat(ret, '`');
@@ -4882,7 +4882,7 @@ BEGIN
         --    from pg_index ind join pg_class cl on ind.indrelid = cl.oid
         --    where ind.indrelid = tabOid and cl.oid = tabOid
     LOOP
-        ret := pg_catalog.concat(ret, ',\n  ');
+        ret := pg_catalog.concat(ret, E',\n  ');
         columnNums := pg_catalog.replace(records.indkey::pg_catalog.text, ' '::pg_catalog.text, ','::pg_catalog.text);
         --execute format('select GROUP_CONCAT(attname separator \'`,`\')
         --                    from pg_attribute
@@ -4913,7 +4913,7 @@ BEGIN
         from pg_constraint cons
         where (cons.contype = 'f') and (cons.conrelid = tabOid)
     LOOP
-        ret := pg_catalog.concat(ret, ',\n  ');
+        ret := pg_catalog.concat(ret, E',\n  ');
         ret := pg_catalog.concat(ret, 'CONSTRAINT `');
         ret := pg_catalog.concat(ret, records.conname);
         ret := pg_catalog.concat(ret, '` FOREIGN KEY (`');
@@ -4953,7 +4953,7 @@ BEGIN
         from pg_constraint cons
         where (cons.contype = 'c') and (cons.conrelid = tabOid)
     LOOP
-        ret := pg_catalog.concat(ret, ',\n  ');
+        ret := pg_catalog.concat(ret, E',\n  ');
         ret := pg_catalog.concat(ret, 'CONSTRAINT ');
         ret := pg_catalog.concat(ret, records.conname);
         ret := pg_catalog.concat(ret, ' ');
@@ -4962,9 +4962,9 @@ BEGIN
 
     if (0 < autoInc) then
         autoInc := autoInc + 1;
-        ret := pg_catalog.concat(ret, '\n) ENGINE=InnoDB AUTO_INCREMENT=', autoInc::text, ' DEFAULT CHARSET=utf8mb4');
+        ret := pg_catalog.concat(ret, E'\n) ENGINE=InnoDB AUTO_INCREMENT=', autoInc::text, ' DEFAULT CHARSET=utf8mb4');
     else
-        ret := pg_catalog.concat(ret, '\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+        ret := pg_catalog.concat(ret, E'\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
     end if;
 
     tableComment := '';

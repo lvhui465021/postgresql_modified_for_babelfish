@@ -96,10 +96,7 @@ SHOW CREATE VIEW mysql_routine_view
 --------------
 
 View	Create View	character_set_client	collation_connection
-mysql_routine_view	CREATE ALGORITHM=UNDEFINED DEFINER=`test`@`%` SQL SECURITY DEFINER VIEW `mysql_routine_view` AS select `id``
-``value_int``
-``mysql_routine_add(value_int``1)``AS``calculated
-` from `mysql_routine_log`	utf8mb4	utf8mb4_general_ci
+mysql_routine_view	CREATE ALGORITHM=UNDEFINED DEFINER=`test`@`%` SQL SECURITY DEFINER VIEW `mysql_routine_view` AS select `id``value_int``mysql_routine_add(value_int``1)``AS``calculated` from `mysql_routine_log`	utf8mb4	utf8mb4_general_ci
 1 row in set
 
 --------------

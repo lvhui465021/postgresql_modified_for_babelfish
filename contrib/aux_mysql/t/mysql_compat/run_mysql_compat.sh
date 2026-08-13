@@ -77,9 +77,15 @@ compare_output()
   normalized_file="$scratch_dir/$test_name.normalized"
   expected_file="$expected_dir/$test_name.out"
 
+  # SHOW CREATE FUNCTION echoes the DEFINER of aux_mysql's own routines (e.g.
+  # mysql.version()), which is whichever OS user ran initdb -- otherwise the
+  # golden files would only ever match on the machine that generated them.
+  # Deliberately scoped to the current OS user so that DEFINERs belonging to
+  # objects the suite itself creates (role `test`) still get compared verbatim.
   sed -E \
     -e 's/ \([0-9]+\.[0-9]+ sec\)/ (<TIME> sec)/g' \
     -e 's/_[0-9]+_mysql/_<OID>_mysql/g' \
+    -e "s/DEFINER=\`$(id -un)\`@/DEFINER=\`<OSUSER>\`@/g" \
     "$transcript_file" > "$normalized_file"
 
   if [[ "$update_expected" == 1 ]]; then

@@ -214,7 +214,14 @@ SHOW CREATE TABLE mysql_metadata_table
 --------------
 
 Table	Create Table
-mysql_metadata_table	CREATE TABLE `mysql_metadata_table` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `code` varchar(20) NOT NULL COLLATE case_insensitive,\n  `value_int` int(11) DEFAULT 0 COMMENT 'metadata column',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `mysql_metadata_table_code_key`(`code`),\n  KEY `mysql_metadata_value_index`(`value_int`)\n) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COMMENT 'metadata table'
+mysql_metadata_table	CREATE TABLE `mysql_metadata_table` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `code` varchar(20) NOT NULL COLLATE case_insensitive,
+  `value_int` int(11) DEFAULT 0 COMMENT 'metadata column',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `mysql_metadata_table_code_key`(`code`),
+  KEY `mysql_metadata_value_index`(`value_int`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COMMENT 'metadata table'
 1 row in set
 
 --------------
@@ -222,10 +229,7 @@ SHOW CREATE VIEW mysql_metadata_view
 --------------
 
 View	Create View	character_set_client	collation_connection
-mysql_metadata_view	CREATE ALGORITHM=UNDEFINED DEFINER=`test`@`%` SQL SECURITY DEFINER VIEW `mysql_metadata_view` AS select `id``
-``code``
-``value_int
-` from `mysql_metadata_table`	utf8mb4	utf8mb4_general_ci
+mysql_metadata_view	CREATE ALGORITHM=UNDEFINED DEFINER=`test`@`%` SQL SECURITY DEFINER VIEW `mysql_metadata_view` AS select `id``code``value_int` from `mysql_metadata_table`	utf8mb4	utf8mb4_general_ci
 1 row in set
 
 --------------
@@ -233,7 +237,7 @@ SHOW CREATE FUNCTION mysql.version
 --------------
 
 Function	sql_mode	Create Function	character_set_client	collation_connection	Database Collation
-version	STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`unvdb`@`%` FUNCTION `version`() RETURNS text
+version	STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION	CREATE DEFINER=`<OSUSER>`@`%` FUNCTION `version`() RETURNS text
 mysVersion	utf8mb4	utf8mb4_general_ci	utf8mb4_general_ci
 1 row in set
 
