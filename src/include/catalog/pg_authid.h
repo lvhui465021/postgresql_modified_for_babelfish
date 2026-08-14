@@ -45,6 +45,18 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	text		rolpassword;	/* password, if any */
 	timestamptz rolvaliduntil;	/* password expiration time, if any */
+
+	/*
+	 * Compatibility-protocol password verifiers (MySQL, TDS, ...), as a
+	 * newline-separated list of self-describing verifier strings (each one
+	 * is whatever encrypt_password() would have produced, so its type is
+	 * recoverable via get_password_type()).  Kept separate from
+	 * rolpassword so that native PostgreSQL authentication -- and every
+	 * existing consumer of rolpassword's format (pg_shadow, pg_dumpall,
+	 * check_password_hook, RenameRole, ...) -- is completely unaffected by
+	 * fusion's multi-protocol verifiers.  See get_role_password_ext().
+	 */
+	text		rolpasswordext; /* compat-protocol verifiers, if any */
 #endif
 } FormData_pg_authid;
 

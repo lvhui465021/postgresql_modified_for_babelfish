@@ -91,6 +91,216 @@ get_role_password(const char *role, const char **logdetail)
 }
 
 /*
+ * Scan a rolpasswordext-style newline-separated verifier list for an entry
+ * whose type matches 'wanted'.  Returns a palloc'd copy of the matching
+ * verifier, or NULL if none is found.
+ *
+ * The whole list is always scanned to completion, even after a match is
+ * found: any MD5/SCRAM entry (those belong only in rolpassword, never
+ * rolpasswordext -- see IV-2 in P3-2_AUTH_SPEC.md) or any entry
+ * get_password_type() can't identify (IV-3) makes the entire list
+ * untrustworthy, so the whole thing is treated as corrupt and rejected
+ * rather than partially trusted.
+ */
+static char *
+find_verifier_of_type(const char *verifier_list, PasswordType wanted)
+{
+	char	   *copy = pstrdup(verifier_list);
+	char	   *line = copy;
+	char	   *result = NULL;
+
+	while (line != NULL && *line != '\0')
+	{
+		char	   *nl = strchr(line, '\n');
+		PasswordType type;
+
+		if (nl != NULL)
+			*nl = '\0';
+
+		type = get_password_type(line);
+
+		if (type == PASSWORD_TYPE_PLAINTEXT ||
+			type == PASSWORD_TYPE_MD5 ||
+			type == PASSWORD_TYPE_SCRAM_SHA_256)
+		{
+			ereport(LOG,
+					(errmsg("rolpasswordext contains an invalid verifier entry")));
+			if (result != NULL)
+				pfree(result);
+			pfree(copy);
+			return NULL;
+		}
+
+		if (result == NULL && type == wanted)
+			result = pstrdup(line);
+
+		line = (nl != NULL) ? nl + 1 : NULL;
+	}
+
+	pfree(copy);
+	return result;
+}
+
+/*
+ * Protocol-aware counterpart of get_role_password().
+ *
+ * kind == COMPAT_PROTOCOL_POSTGRES or COMPAT_PROTOCOL_TDS: identical to
+ * get_role_password() -- only rolpassword is consulted.  TDS's own
+ * authentication (babelfishpg_tds's CheckAuthPassword()) already calls the
+ * native get_role_password() + plain_crypt_verify() directly and fully
+ * reuses PG's SCRAM/MD5 verifier format, so it needs no rolpasswordext
+ * entries of its own; this function exists mainly so callers can pass a
+ * CompatibilityProtocolKind uniformly without a special case.
+ *
+ * kind == COMPAT_PROTOCOL_MYSQL: look for a verifier of type 'wanted'
+ * first in rolpasswordext, falling back to rolpassword *only if* its
+ * actual type (via get_password_type(), not the password_encryption GUC)
+ * matches 'wanted'.  This dual gate (exact type match here, plus each
+ * *_verify() function's own format check) is what keeps a MySQL
+ * connection from ever being handed a SCRAM/MD5 secret -- see SEC-1..SEC-3
+ * in P3-2_AUTH_SPEC.md.
+ */
+char *
+get_role_password_ext(const char *role, CompatibilityProtocolKind kind,
+					   PasswordType wanted, const char **logdetail)
+{
+	TimestampTz vuntil = 0;
+	HeapTuple	roleTup;
+	Datum		datum;
+	bool		isnull;
+	char	   *result = NULL;
+
+	if (kind == COMPAT_PROTOCOL_POSTGRES || kind == COMPAT_PROTOCOL_TDS)
+		return get_role_password(role, logdetail);
+
+	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(role));
+	if (!HeapTupleIsValid(roleTup))
+	{
+		*logdetail = psprintf(_("Role \"%s\" does not exist."), role);
+		return NULL;			/* no such user */
+	}
+
+	datum = SysCacheGetAttr(AUTHNAME, roleTup,
+							 Anum_pg_authid_rolpasswordext, &isnull);
+	if (!isnull)
+	{
+		char	   *ext_list = TextDatumGetCString(datum);
+
+		result = find_verifier_of_type(ext_list, wanted);
+		pfree(ext_list);
+	}
+
+	if (result == NULL)
+	{
+		/* Fall back to rolpassword, but only if its real type matches. */
+		datum = SysCacheGetAttr(AUTHNAME, roleTup,
+								 Anum_pg_authid_rolpassword, &isnull);
+		if (!isnull)
+		{
+			char	   *shadow_pass = TextDatumGetCString(datum);
+
+			if (get_password_type(shadow_pass) == wanted)
+				result = shadow_pass;
+			else
+				pfree(shadow_pass);
+		}
+	}
+
+	if (result == NULL)
+	{
+		ReleaseSysCache(roleTup);
+		*logdetail = psprintf(_("User \"%s\" has no password assigned for this protocol."),
+							  role);
+		return NULL;
+	}
+
+	datum = SysCacheGetAttr(AUTHNAME, roleTup,
+							 Anum_pg_authid_rolvaliduntil, &isnull);
+	if (!isnull)
+		vuntil = DatumGetTimestampTz(datum);
+
+	ReleaseSysCache(roleTup);
+
+	if (!isnull && vuntil < GetCurrentTimestamp())
+	{
+		*logdetail = psprintf(_("User \"%s\" has an expired password."), role);
+		pfree(result);
+		return NULL;
+	}
+
+	return result;
+}
+
+/*
+ * Return a new newline-separated verifier list where any existing entry of
+ * the same type as 'new_verifier' has been dropped and 'new_verifier'
+ * appended, so the result holds at most one verifier per PasswordType (IV-1
+ * in P3-2_AUTH_SPEC.md).  'old_list' may be NULL for a role with no
+ * existing rolpasswordext entries.
+ *
+ * Any pre-existing entry this function can't make sense of (MD5/SCRAM,
+ * which belong only in rolpassword -- IV-2; or unrecognized/plaintext --
+ * IV-3) is dropped with a WARNING rather than propagated.  Unlike the read
+ * path (find_verifier_of_type(), which fails the whole list closed on any
+ * such entry so a corrupt value can never be partially trusted for
+ * authentication), the write path's job is to let an administrator set a
+ * clean new password even if what's on disk is already damaged -- erroring
+ * out here would leave them unable to fix it via ALTER ROLE.
+ */
+char *
+merge_verifier_into_list(const char *old_list, const char *new_verifier)
+{
+	PasswordType new_type = get_password_type(new_verifier);
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+
+	if (old_list != NULL)
+	{
+		char	   *copy = pstrdup(old_list);
+		char	   *line = copy;
+
+		while (line != NULL && *line != '\0')
+		{
+			char	   *nl = strchr(line, '\n');
+			PasswordType type;
+
+			if (nl != NULL)
+				*nl = '\0';
+
+			type = get_password_type(line);
+
+			if (type == new_type)
+			{
+				/* superseded by new_verifier below */
+			}
+			else if (type == PASSWORD_TYPE_PLAINTEXT ||
+					 type == PASSWORD_TYPE_MD5 ||
+					 type == PASSWORD_TYPE_SCRAM_SHA_256)
+			{
+				ereport(WARNING,
+						(errmsg("dropping invalid pre-existing rolpasswordext entry")));
+			}
+			else
+			{
+				if (buf.len > 0)
+					appendStringInfoChar(&buf, '\n');
+				appendStringInfoString(&buf, line);
+			}
+
+			line = (nl != NULL) ? nl + 1 : NULL;
+		}
+		pfree(copy);
+	}
+
+	if (buf.len > 0)
+		appendStringInfoChar(&buf, '\n');
+	appendStringInfoString(&buf, new_verifier);
+
+	return buf.data;
+}
+
+/*
  * What kind of a password type is 'shadow_pass'?
  */
 PasswordType

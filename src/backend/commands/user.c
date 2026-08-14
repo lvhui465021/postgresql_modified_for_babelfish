@@ -438,18 +438,44 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 			ereport(NOTICE,
 					(errmsg("empty string is not a valid password, clearing password")));
 			new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+			new_record_nulls[Anum_pg_authid_rolpasswordext - 1] = true;
 		}
 		else
 		{
+			PasswordType shadow_type;
+
 			/* Encrypt the password to the requested format. */
 			shadow_pass = encrypt_password(Password_encryption, stmt->role,
 										   password);
-			new_record[Anum_pg_authid_rolpassword - 1] =
-				CStringGetTextDatum(shadow_pass);
+
+			/*
+			 * Route by the *actual* type of the encrypted result, not the
+			 * password_encryption GUC: encrypt_password() has a pass-through
+			 * for already-encoded input, so a caller can hand it a
+			 * pre-encoded verifier of a different type than the GUC says.
+			 * See P3-2_AUTH_SPEC.md SS5.1.
+			 */
+			shadow_type = get_password_type(shadow_pass);
+			if (shadow_type == PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD ||
+				shadow_type == PASSWORD_TYPE_MYSQL_CACHING_SHA2_PASSWORD)
+			{
+				new_record[Anum_pg_authid_rolpasswordext - 1] =
+					CStringGetTextDatum(shadow_pass);
+				new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+			}
+			else
+			{
+				new_record[Anum_pg_authid_rolpassword - 1] =
+					CStringGetTextDatum(shadow_pass);
+				new_record_nulls[Anum_pg_authid_rolpasswordext - 1] = true;
+			}
 		}
 	}
 	else
+	{
 		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+		new_record_nulls[Anum_pg_authid_rolpasswordext - 1] = true;
+	}
 
 	new_record[Anum_pg_authid_rolvaliduntil - 1] = validUntil_datum;
 	new_record_nulls[Anum_pg_authid_rolvaliduntil - 1] = validUntil_null;
@@ -923,23 +949,62 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 			ereport(NOTICE,
 					(errmsg("empty string is not a valid password, clearing password")));
 			new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+			new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 		}
 		else
 		{
+			PasswordType shadow_type;
+
 			/* Encrypt the password to the requested format. */
 			shadow_pass = encrypt_password(Password_encryption, rolename,
 										   password);
-			new_record[Anum_pg_authid_rolpassword - 1] =
-				CStringGetTextDatum(shadow_pass);
+
+			/*
+			 * Route by the *actual* type of the encrypted result, not the
+			 * password_encryption GUC -- see the matching comment in
+			 * CreateRole() and P3-2_AUTH_SPEC.md SS5.1.
+			 */
+			shadow_type = get_password_type(shadow_pass);
+			if (shadow_type == PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD ||
+				shadow_type == PASSWORD_TYPE_MYSQL_CACHING_SHA2_PASSWORD)
+			{
+				bool		old_ext_isnull;
+				Datum		old_ext_datum = heap_getattr(tuple,
+														  Anum_pg_authid_rolpasswordext,
+														  pg_authid_dsc,
+														  &old_ext_isnull);
+				char	   *old_ext_list = old_ext_isnull ? NULL :
+					TextDatumGetCString(old_ext_datum);
+				char	   *merged = merge_verifier_into_list(old_ext_list, shadow_pass);
+
+				new_record[Anum_pg_authid_rolpasswordext - 1] =
+					CStringGetTextDatum(merged);
+				new_record_repl[Anum_pg_authid_rolpasswordext - 1] = true;
+				/* rolpassword is untouched: new_record_repl[...rolpassword...] stays false */
+			}
+			else
+			{
+				new_record[Anum_pg_authid_rolpassword - 1] =
+					CStringGetTextDatum(shadow_pass);
+				new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
+				/* rolpasswordext is untouched */
+			}
 		}
-		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 	}
 
-	/* unset password */
+	/*
+	 * unset password: PASSWORD NULL clears *both* rolpassword and
+	 * rolpasswordext.  A partial clear ("I removed the password" but a
+	 * verifier for some other protocol silently survives) is a worse
+	 * failure mode than the inconvenience of having to reset both --
+	 * fail-safe beats orthogonality here.  See SEC-5 in P3-2_AUTH_SPEC.md.
+	 */
 	if (dpassword && dpassword->arg == NULL)
 	{
 		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+		new_record_repl[Anum_pg_authid_rolpasswordext - 1] = true;
+		new_record_nulls[Anum_pg_authid_rolpasswordext - 1] = true;
 	}
 
 	/* valid until */

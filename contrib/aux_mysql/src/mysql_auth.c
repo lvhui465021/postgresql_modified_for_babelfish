@@ -780,7 +780,9 @@ mysql_perform_authentication(MysPacketState *ps, Port *port)
                  errmsg("MySQL authentication plugin \"%s\" is not supported",
                         plugin_name)));
 
-    shadow_pass = get_role_password(port->user_name, &logdetail);
+    shadow_pass = get_role_password_ext(port->user_name, COMPAT_PROTOCOL_MYSQL,
+                                         PASSWORD_TYPE_MYSQL_NATIVE_PASSWORD,
+                                         &logdetail);
     if (shadow_pass == NULL)
     {
         if (ClientAuthentication_hook)

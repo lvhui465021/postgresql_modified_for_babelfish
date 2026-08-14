@@ -14,6 +14,7 @@
 #define PG_CRYPT_H
 
 #include "datatype/timestamp.h"
+#include "libpq/libpq-be.h"		/* for CompatibilityProtocolKind */
 
 /*
  * Valid password hashes may be very long, but we don't want to store anything
@@ -73,6 +74,12 @@ extern char *encrypt_password(PasswordType target_type, const char *role,
 							  const char *password);
 
 extern char *get_role_password(const char *role, const char **logdetail);
+extern char *get_role_password_ext(const char *role,
+									CompatibilityProtocolKind kind,
+									PasswordType wanted,
+									const char **logdetail);
+extern char *merge_verifier_into_list(const char *old_list,
+									   const char *new_verifier);
 
 extern int	md5_crypt_verify(const char *role, const char *shadow_pass,
 							 const char *client_pass, const uint8 *md5_salt,
