@@ -2267,8 +2267,11 @@ MysExecSetVariableStmt(ParseState *pstate, VariableSetStmt *n, ParamListInfo par
      * scope) and mysql._set_global_transaction (cluster-wide default for
      * future sessions) are deliberately left as no-ops here: neither has a
      * ready PostgreSQL equivalent reachable from a single session-scoped
-     * SQL statement. See FUSION_PLAN.md P2-10 / P2-10_FIX_SPEC.md section 5
-     * (items A and B) before wiring either up.
+     * SQL statement.  This is also the final scope decision (2026-08-14):
+     * openHalo upstream keeps both of these store-only as well, and the
+     * project scope is parity with openHalo, so they stay unimplemented
+     * rather than growing pending-state/shmem machinery.  See FUSION_PLAN.md
+     * P2-13/P2-14 and P2-10_FIX_SPEC.md section 5 (items A and B).
      */
     if (n->name != NULL &&
         strcmp(n->name, "mysql._set_session_transaction") == 0)
