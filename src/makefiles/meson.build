@@ -121,6 +121,11 @@ pgxs_kv = {
   'LIBS': var_libs,
 }
 
+# A C++ compiler for PGXS.  Upstream only fills CXX when LLVM is enabled,
+# but out-of-tree extensions (e.g. Babelfish's T-SQL extension, which ships
+# ANTLR-generated C++) need a usable CXX even on LLVM-less builds.
+pgxs_cxx = find_program(['c++', 'g++'], native: true, required: false)
+
 if llvm.found()
   pgxs_kv += {
     'CLANG': clang.path(),
@@ -130,9 +135,27 @@ if llvm.found()
 else
   pgxs_kv += {
     'CLANG': '',
-    'CXX': '',
     'LLVM_BINPATH': '',
   }
+  if pgxs_cxx.found()
+    pgxs_kv += {'CXX': pgxs_cxx.full_path()}
+  else
+    pgxs_kv += {'CXX': ''}
+  endif
+endif
+
+# When the server is built with libxml, the installed pg_config.h defines
+# USE_LIBXML, so any extension code that includes utils/xml.h needs the
+# libxml2 headers.  Make sure PGXS CPPFLAGS (and pg_config --cppflags)
+# carry the include path, or e.g. Babelfish's babelfishpg_common fails to
+# compile with 'libxml/tree.h: No such file or directory'.
+if libxml.found() and libxml.type_name() == 'pkgconfig'
+  # The libxml-2.0 .pc file puts the headers in ${includedir}/libxml2, so
+  # ask pkg-config for the real cflags instead of guessing the layout.
+  libxml_cflags = run_command('pkg-config', ['--cflags', 'libxml-2.0'], check: false)
+  if libxml_cflags.returncode() == 0
+    pgxs_kv += {'CPPFLAGS': pgxs_kv['CPPFLAGS'] + ' ' + libxml_cflags.stdout().strip()}
+  endif
 endif
 
 pgxs_bins = {
