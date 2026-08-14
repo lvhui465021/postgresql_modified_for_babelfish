@@ -797,3 +797,11 @@ mysql_port = 23306   # 注意:本机系统级 mysql.service 占用 3306/33060,�
 **套件状态**:001_tdspasswd PASS、003_bbfextnotloaded PASS;002 需 Kerberos 环境跳过;004 需 oldinstall/installdir16(旧版本安装)跳过。
 
 **调试过程教训**:多次`行为不一致`(同一配方有的崩、有的错、有的对)实为 1433 端口被并行的复现集群占用导致的幻象——TDS 复现必须保证 1433 唯一占用者;真正的触发器差异是 log_statement 配置(框架节点强制 all,手工节点默认 none)。
+
+### MySQL 兼容层插件化:阶段 1 完成(2026-08-14 晚,用户定案路线 B:独立仓库 mysql_extensions,与 babelfish_extensions 对称)
+
+**边界定案**(用户拍板):执行器/命令 fork(mys_execMain/mys_nodeModifyTable/mys_tablecmds/mys_sequence/mys_uservar/systemVar 等)+ vtable 接缝 + 方言头文件**留在内核**(MySQL 语义织进执行器循环/命令实现内部,SPI 在它们之上表达不了,迁出等于把内核内部结构当 ABI 导出);解析模块 mysql_parser、类型/SQL 函数模块 mysm、协议模块 aux_mysql **迁出为扩展**。边界声明见 docs/MYSQL_PLUGIN_BOUNDARY.md。
+
+**阶段 1 落地**:mysql_parser(8 源文件 + bison/flex/kwlist 生成链)与 mysm(21 源文件)迁入 contrib/ 为 PGXS 扩展,内核 meson 摘除两个 shared_module 与生成目标;src/include/meson.build 补注册 adapter 头目录(openHalo 新增顶层目录漏注册);aux_mysql 的 G3 gate 与 MySQL TAP 移出 meson;postmaster 套件 004/005 拆出;**测试联动切换为 install-first**(run-baseline.sh:PG 核心套件走 meson,MySQL/TDS TAP 先 install 扩展再 prove 对 inst/);babelfish_extensions/build-all.sh 收编三 MySQL 模块(七扩展一键)。
+
+**阶段 2(规划)**:git 切分(带历史)为独立仓库 mysql_extensions,自建 build-all.sh,双仓联调。

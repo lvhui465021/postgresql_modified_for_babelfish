@@ -1,0 +1,7 @@
+src/*.o
+src/*.so
+src/mys_gram.c
+src/mys_gram.h
+src/mys_scan.c
+src/mys_kwlist_d.h
+.deps/

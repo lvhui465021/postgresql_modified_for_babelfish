@@ -47,3 +47,7 @@ lib*.pc
 /tmp_install/
 /portlock/
 CLAUDE.md
+/contrib/aux_mysql/t/log/
+/src/test/postmaster/t/log/
+/inst/
+/build/

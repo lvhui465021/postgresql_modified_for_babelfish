@@ -22,14 +22,6 @@ aux_mysql = shared_module('aux_mysql',
   name_prefix: '',
 )
 
-# Verify every imported symbol of every loadable MySQL-compatibility layer
-# resolves against the backend.  Keep this test next to aux_mysql so the
-# protocol module is included alongside mysql_parser and mysm in the G3 gate.
-test('mysql_kernel_exports',
-  find_program(join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_kernel_exports.sh')),
-  args: [postgres, mysql_parser, mysm, aux_mysql],
-  depends: [postgres, mysql_parser, mysm, aux_mysql])
-
 install_data(
   'aux_mysql.control',
   kwargs: contrib_data_args,
@@ -54,12 +46,5 @@ tests += {
       'versioning',
     ],
     'regress_args': ['--temp-config', files('aux_mysql_regress.conf')],
-  },
-  'tap': {
-    'tests': [
-      't/005_mysql_compat.pl',
-      't/006_pg_dump_restore.pl',
-      't/007_mysql_parallel.pl',
-    ],
   },
 }
