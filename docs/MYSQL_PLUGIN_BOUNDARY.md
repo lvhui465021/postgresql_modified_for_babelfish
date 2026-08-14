@@ -1,6 +1,6 @@
 # MySQL 兼容层插件化边界声明(内核 ↔ 扩展)
 
-> 2026-08-14 定案。本文件描述 MySQL 兼容层在内核与扩展之间的边界,以及 `mysql_extensions` 独立仓库路线(与 babelfish_extensions 对称)的实施背景。
+> 2026-08-14 定案,阶段 2 同日完成。本文件描述 MySQL 兼容层在内核与扩展之间的边界,以及 `mysql_extensions` 独立仓库(与 babelfish_extensions 对称)的实施背景。阶段 2 落地后,三个模块位于独立仓库 /home/hlv/openhalo-update/mysql_extensions(远程待建),本文件随该仓库维护为 README 边界声明。
 
 ## 1. 三层边界(终态)
 

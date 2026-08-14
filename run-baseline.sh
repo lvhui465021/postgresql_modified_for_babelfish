@@ -23,8 +23,13 @@ echo '=== 1. meson: PG-core suites (setup/postmaster/regress/authentication) ===
 PERL5LIB=/home/hlv/perl5/lib/perl5 meson test -C build \
   --suite setup --suite postmaster --suite regress --suite authentication || failures=$((failures+1))
 
+# MySQL extension tests live in the standalone mysql_extensions repository
+# (Phase 2 of the pluginization); the kernel keeps the postmaster TAP tests
+# that exercise the installed modules end to end.
+MYSQLEXT_DIR="${MYSQLEXT_DIR:-$K/../mysql_extensions}"
+
 echo '=== 2. prove: MySQL TAP suites (against installed extensions) ==='
-cd "$K/contrib/aux_mysql/t"
+cd "$MYSQLEXT_DIR/contrib/aux_mysql/t"
 PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v \
   005_mysql_compat.pl 006_pg_dump_restore.pl 007_mysql_parallel.pl || failures=$((failures+1))
 cd "$K/src/test/postmaster/t"

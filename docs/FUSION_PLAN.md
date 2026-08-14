@@ -804,4 +804,4 @@ mysql_port = 23306   # 注意:本机系统级 mysql.service 占用 3306/33060,�
 
 **阶段 1 落地**:mysql_parser(8 源文件 + bison/flex/kwlist 生成链)与 mysm(21 源文件)迁入 contrib/ 为 PGXS 扩展,内核 meson 摘除两个 shared_module 与生成目标;src/include/meson.build 补注册 adapter 头目录(openHalo 新增顶层目录漏注册);aux_mysql 的 G3 gate 与 MySQL TAP 移出 meson;postmaster 套件 004/005 拆出;**测试联动切换为 install-first**(run-baseline.sh:PG 核心套件走 meson,MySQL/TDS TAP 先 install 扩展再 prove 对 inst/);babelfish_extensions/build-all.sh 收编三 MySQL 模块(七扩展一键)。
 
-**阶段 2(规划)**:git 切分(带历史)为独立仓库 mysql_extensions,自建 build-all.sh,双仓联调。
+**阶段 2(已完成,2026-08-14)**:git filter-repo 切分(18 提交完整历史)为独立仓库 `mysql_extensions`(/home/hlv/openhalo-update/mysql_extensions,远程待建),三模块从内核树移除(contrib/meson.build 摘除),自建 build-all.sh 对内核 inst 构建安装,run-baseline.sh 改指外部仓库测试路径,双仓联调实测:基线 524 ok / 0 not ok,三协议冒烟通过。内核残留仅为边界声明的接缝 + 执行器/命令 fork。
