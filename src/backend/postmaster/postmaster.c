@@ -235,9 +235,6 @@ char	   *ListenAddresses;
 int			SuperuserReservedConnections;
 int			ReservedConnections;
 
-/* The hook for protocol extension init functions */
-listen_init_hook_type	listen_init_hook = NULL;
-
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
 static int	NumListenSockets = 0;
@@ -1485,15 +1482,6 @@ InitializeProtocolListeners(void)
 		if (routine != NULL && routine->listen_init != NULL)
 			routine->listen_init();
 	}
-
-	/*
-	 * Legacy single-pointer hook, kept only as a compatibility shim for
-	 * loadable modules compiled against the old listen_init_hook symbol.
-	 * It runs after the per-kind slots; new code should use
-	 * RegisterListenInitRoutine() instead of saving/chaining this hook.
-	 */
-	if (listen_init_hook != NULL)
-		listen_init_hook();
 }
 
 

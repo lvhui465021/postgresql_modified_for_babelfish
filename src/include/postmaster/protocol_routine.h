@@ -46,6 +46,18 @@ typedef enum ProtocolCommandResult
  *
  * Each wire protocol provides one const instance of this struct.
  * A NULL callback means "use the standard PostgreSQL behaviour".
+ *
+ * Two notes for registrants of a non-standard kind:
+ *  - The command-I/O wrappers (read_command/process_command/comm_reset/
+ *    is_reading_msg) and session_initialize/send_backend_key_data treat a
+ *    NULL member on a non-standard kind as an error.  A protocol whose
+ *    mainfunc owns the whole backend loop (TDS) never reaches those
+ *    wrappers, but must still supply explicit no-op/false stubs rather
+ *    than NULL to satisfy the contract.
+ *  - The five simple-query multi-statement policy fields
+ *    (allow_multi_statements .. capture_session_state) and parser_routine
+ *    /process_utility are legitimately NULL for a protocol that does not
+ *    use the PG simple-query path or the raw-parse/DDL dispatch points.
  * ----------------------------------------------------------------
  */
 typedef struct ProtocolRoutine
@@ -141,29 +153,13 @@ extern bool   CompatibilityProtocolKindIsValid(CompatibilityProtocolKind kind);
 /*
  * ListenProtocolServerPort -- open a listener socket for a registered
  * protocol kind on the given address/port.  Called by the postmaster for
- * built-in protocols and by loadable modules (via listen_init_hook) for
- * compatibility listeners such as MySQL; exported so modules can open
+ * built-in protocols and by loadable modules (via RegisterListenInitRoutine)
+ * for compatibility listeners such as MySQL; exported so modules can open
  * their listener from the postmaster's address space.
  */
 extern int  ListenProtocolServerPort(CompatibilityProtocolKind kind, int family,
 									 const char *hostName, unsigned short portNumber,
 									 const char *unixSocketName);
-
-/*
- * listen_init_hook -- legacy single-pointer hook invoked during postmaster
- * startup so that additional wire-protocol listeners (MySQL, TDS, ...) can
- * open their listener socket.  Built-in protocols are started directly by
- * the postmaster; extensions set this hook in their _PG_init.
- *
- * Deprecated: prefer RegisterListenInitRoutine() (compatibility.h), which
- * stores the callback in the per-dialect CompatibilityRoutine registry and
- * is invoked in protocol-kind order.  This global is kept only so modules
- * compiled against the old symbol keep working; the postmaster calls it
- * once, after the per-kind slots, so legacy users no longer need to save
- * and chain it themselves.
- */
-typedef void (*listen_init_hook_type) (void);
-extern PGDLLEXPORT listen_init_hook_type listen_init_hook;
 
 /* ----------------------------------------------------------------
  *    Helper functions called from postgres.c / dest.c

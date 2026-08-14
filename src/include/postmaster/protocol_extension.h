@@ -15,14 +15,6 @@
 
 #include "libpq/libpq.h"
 
-/*
- * hook function type for protocol extensions to register initialization
- */
-typedef void (*listen_init_hook_type)(void);
-
-/* Globals in postmaster.c */
-extern	PGDLLEXPORT listen_init_hook_type listen_init_hook;
-
 /* Functions in postmaster.c */
 extern PGDLLEXPORT int	listen_have_free_slot(void);
 extern PGDLLEXPORT void	listen_add_socket(pgsocket fd);

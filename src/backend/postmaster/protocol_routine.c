@@ -31,13 +31,6 @@ static const ProtocolRoutine StandardProtocolRoutine = {
 };
 
 /*
- * listen_init_hook (MySQL, TDS, ...) is defined in postmaster.c, which
- * predates this file in the merged tree and already wires the postmaster's
- * call site; only the extern declaration in protocol_routine.h is needed
- * here to avoid a duplicate global definition at link time.
- */
-
-/*
  * RegisterProtocolRoutine  –  register a protocol routine in the global
  * registry.  Called by each protocol's init function.
  */
