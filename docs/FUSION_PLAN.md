@@ -719,6 +719,7 @@ mysql_port = 23306   # 注意:本机系统级 mysql.service 占用 3306/33060,�
 | `039f9407e` `fusion: register a full TDS ProtocolRoutine, drop pe_config` | `tds_srv.c` 注册完整 vtable(init 承接 TDS 状态初始化、process_command/authenticate/end_command 签名适配、printtup 四件套转 create_dest_receiver)+ `support_funcs.c` 的 listen_add_protocol_socket 调用更新 | P3-1 |
 | `75219d366` `fusion: pilot-migrate identity-datatype hook into the TDS ADT vtable` | 首个 T-SQL 全局 hook 迁入 ADTExtMethod 槽位(tsql_adtext 注册 identity_datatype,移除 hook 安装/卸载与 save-chain) | P3-1 组 B 试点 |
 | `29b251591` `fusion: wire T-SQL DDL dispatcher into the TDS ProtocolRoutine vtable slot (A1 phase-1 pilot)` | pl_handler.c 在 `_PG_init` 调 `SetProtocolRoutineProcessUtility(COMPAT_PROTOCOL_TDS, bbf_ProcessUtility)`(fini 置 NULL),TDS 连接 DDL 改走 vtable 分支;**ProcessUtility_hook 安装保留**(它还承载 PG 连接的保护逻辑);详见 [P3-A1_PROCESS_UTILITY_MIGRATION.md](P3-A1_PROCESS_UTILITY_MIGRATION.md) | P3-1 A1 阶段一试点 |
+| `db2d961ba` `fusion: fix segfault in TDS batch execution via pe_process_command (A1 followup)` | pe_process_command 补回 TDS error context 压/弹与 Cleanup_xact_PgStat(修复 CREATE LOGIN 在 log_statement=all 下 signal 11,详见文末 TAP 补跑节);修正`read_command/process_command 不可达`的错误注释 | P3-1 回归修复 |
 
 ### `postgresql_modified_for_babelfish`(分支 `openhalo-fusion`)
 
@@ -734,6 +735,7 @@ mysql_port = 23306   # 注意:本机系统级 mysql.service 占用 3306/33060,�
 | `14970f4e7e` `fusion: retire ProtocolExtensionConfig, resolve everything through ProtocolRoutine` | ProtocolRoutine 加 accept/close/direct_ssl_handshake;ListenConfig/default_protocol_config/libpq_* 包装与全部 fn_* 回退删除;所有连接统一走 pq_init;修复 ClientAuthInProgress 未清除导致 MySQL NOTICE/WARNING 被压制的问题 | P3-1 |
 | `e4873a9712` `fusion: drop the listen_init_hook compatibility shim, document vtable NULL semantics` | 删除 listen_init_hook 全局变量/typedef/调用点(两注册者均已迁注册表,零残留引用);ProtocolRoutine 契约注释完善(no-op vs NULL、多语句字段合法 NULL) | P3-3 收尾 |
 | `c5f87dc02a` `fusion: route T-SQL DDL dispatch through the TDS vtable slot (A1 phase-1 pilot)` | protocol_routine 注册表改内核自有可变拷贝 + `SetProtocolRoutineProcessUtility(kind, fn)` 槽位更新 API(tsql 晚于 tds 加载,须原地更新已解析的 Port 指针);utility.c 分派注释更新 | P3-1 A1 阶段一试点 |
+| `69db3ce1e0` `docs: version-control the fusion documentation and add release notes` | 9 份工作文档收编入 docs/(FUSION_PLAN 头注版本化)+ 新增 RELEASE_NOTES.md(能力/构建前置/已知限制/非目标/测试基线) | 交付收尾 |
 
 > (meson 配置)`uuid=e2fs`:非源码改动,是 `meson configure` 的持久化状态(写入 `build/meson-private/`),**不随 git 走**,新 checkout 需要手动重新配置(P1-11)。
 >
@@ -786,3 +788,12 @@ mysql_port = 23306   # 注意:本机系统级 mysql.service 占用 3306/33060,�
 **行为面**(用户标准:openHalo 自有测试 SQL 集全过;干净集群 3306 + test/test 实跑):13 处差异全部归类 = 1) Note 1105 warning 恢复显示(约 10 文件,融合修掉 openHalo 的 warning 压制,见 P3-1 ClientAuthInProgress 修复) 2) 错误文案更贴 MySQL(80:Incorrect datetime value,错误码相同) 3) P2-6 真实换行(P2-7 SHOW CREATE VIEW 两方同残缺,持平) 4) SHOW PLUGINS 返回 Empty set(openHalo 是 Query OK) 5) GUC 命名差异(00_session 的 mysql.listener_on 在融合不存在,改名集成) 6) 刻意分歧 literal_like_case_insensitive 1→0(LIKE ~~ vs ILIKE,见 COLLATION_STRATEGY_COMPARISON) 7) **90_known_failures:openHalo 13 个已知失败 → 融合仅复现 2 个**(collation 哈希歧义 1105、多表 UPDATE 1064,与 openHalo 同错持平);11 个在融合不再报错(SHOW DATABASES LIKE/SHOW STATUS 三种/TO_BASE64/LOAD_FILE/CAST UNSIGNED/触发器体/PARTITION OF/LOW_PRIORITY/字面量加数字);4 个已知失败断言全部翻转为通过(json_dollar_path/named_lock_state/zero_length_char_varchar/information_schema_statistics)。
 
 **结论**:openHalo MySQL 行为已整合且多数优于上游;未发现融合独有的功能缺失。三模式验证面:五套件基线 18/18(含 005_mysql_compat)+ 标准流程(新集群 3306)+ openHalo 套件 + TDS tsql 端到端 + A1 vtable 试点全部通过。
+### TDS 官方 TAP 套件补跑与 CREATE LOGIN 段错误修复(2026-08-14 晚)
+
+**背景**:交付收尾要求补跑 babelfishpg_tds 官方 TAP 套件。本机无 sqlcmd,编写 sqlcmd→FreeTDS tsql 翻译 shim(双引号字面量改写为单引号 + 按输出检测错误退出码);PERL5LIB 指向 pgxs perl 目录、PG_REGRESS 指向构建树 pg_regress(meson 不安装 pg_regress)。
+
+**发现并修复真实回归(P3-1 引入)**:`001_tdspasswd` 的 CREATE LOGIN 在 `log_statement=all` 下使后端 signal 11 段错误(LD_PRELOAD SIGSEGV 处理器抓栈:`ExecuteSQLBatch` tdssqlbatch.c:118 解引用 NULL error_context_stack,框架节点 3 次稳定复现)。根因:融合的 pe_process_command(P3-1 以完整 TDS ProtocolRoutine 替换 pe_config 时编写)直接调 TdsSocketBackend() 而没有像 pe_read_command / 上游 pe_process_command 那样压/弹 TDS error context;ExecuteSQLBatch 在 stmt_needs_logging 置位(log_statement=all 时 tsql parser 设置)时弹出当前 error context 并假设其非空。修复 `db2d961ba`:恢复上游函数体(push/pop + 无事务时 Cleanup_xact_PgStat)+ 修正`read_command/process_command 不可达`的错误注释。验证:001 6/6、003 2/2 PASS;testcluster 上 CREATE LOGIN/DROP LOGIN 冒烟通过。
+
+**套件状态**:001_tdspasswd PASS、003_bbfextnotloaded PASS;002 需 Kerberos 环境跳过;004 需 oldinstall/installdir16(旧版本安装)跳过。
+
+**调试过程教训**:多次`行为不一致`(同一配方有的崩、有的错、有的对)实为 1433 端口被并行的复现集群占用导致的幻象——TDS 复现必须保证 1433 唯一占用者;真正的触发器差异是 log_statement 配置(框架节点强制 all,手工节点默认 none)。
