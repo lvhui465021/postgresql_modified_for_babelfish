@@ -68,8 +68,9 @@ sub add_hba_line
 	$tokens[1] = '{' . $tokens[1] . '}';    # database
 	$tokens[2] = '{' . $tokens[2] . '}';    # user_name
 
-	# Append empty options and error
+	# Append empty options, the default protocol list and error
 	push @tokens, '';
+	push @tokens, 'postgres,mysql,tds';
 	push @tokens, '';
 
 	# Final line expected, output of the SQL query.
@@ -216,7 +217,7 @@ $hba_expected .= "\n"
   . $line_counters{'hba_rule'} . "|"
   . basename($hba_file) . "|"
   . $line_counters{$hba_file}
-  . '|local|{db1,db3}|{all}|reject||';
+  . '|local|{db1,db3}|{all}|reject||postgres,mysql,tds|';
 
 note "Generating ident structure with include directives";
 
@@ -279,6 +280,7 @@ my $contents = $node->safe_psql(
   user_name,
   auth_method,
   options,
+  protocol,
   error
  FROM pg_hba_file_rules ORDER BY rule_number;));
 is($contents, $hba_expected, 'check contents of pg_hba_file_rules');

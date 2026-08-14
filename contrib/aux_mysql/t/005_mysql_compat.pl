@@ -82,13 +82,26 @@ SET password_encryption = 'mysql_native_password';
 CREATE USER test SUPERUSER PASSWORD 'test';
 });
 
+# With protocol-aware verifier storage, the MySQL native-password
+# verifier lives in pg_authid.rolpasswordext and is deliberately
+# invisible through pg_shadow, which only exposes rolpassword.  The
+# MySQL login below is the real proof that the verifier is present and
+# usable.
+my $ext_check = $node->safe_psql(
+    'postgres', q{
+SELECT rolpasswordext LIKE 'mysql_native_password:%'
+FROM pg_authid
+WHERE rolname = 'test';
+});
+is($ext_check, 't', 'test role stores mysql_native_password in rolpasswordext');
+
 my $pw_check = $node->safe_psql(
     'postgres', q{
 SELECT passwd LIKE 'mysql_native_password:%'
 FROM pg_shadow
 WHERE usename = 'test';
 });
-is($pw_check, 't', 'test role uses mysql_native_password');
+is($pw_check, '', 'mysql_native_password verifier is not exposed via pg_shadow');
 
 # --- PG mode keeps standard integer division ---------------------------
 # The mysql./ and mysql.// division operators live in the mysql schema,

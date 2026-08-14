@@ -719,6 +719,23 @@ openssl x509 -in myclient.crt -noout -subject -nameopt RFC2253 | sed "s/^subject
         Care needs to be taken when using this option, especially when using
         regular expression matching against the <literal>DN</literal>.
       </para>
+
+      <para>
+       There is also a method-independent option <literal>protocol</literal>,
+       which restricts a record to connections using one or more application
+       protocols. It can be specified in any record, and takes a
+       comma-separated list of <literal>postgres</literal>,
+       <literal>mysql</literal>, <literal>tds</literal> or the keyword
+       <literal>all</literal>, in any case. For example,
+       <literal>protocol="postgres,tds"</literal> makes a record apply to
+       PostgreSQL and TDS (SQL Server) connections but not to MySQL ones,
+       while <literal>protocol=mysql</literal> restricts a record to the
+       MySQL compatibility protocol. If no <literal>protocol</literal>
+       option is given, the record matches all protocols. The value in
+       effect for each rule is shown in the <structfield>protocol</structfield>
+       column of the <link linkend="view-pg-hba-file-rules"><structname>pg_hba_file_rules</structname></link>
+       view.
+      </para>
      </listitem>
     </varlistentry>
 

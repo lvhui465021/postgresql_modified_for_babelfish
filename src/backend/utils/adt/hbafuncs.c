@@ -18,6 +18,7 @@
 #include "common/ip.h"
 #include "funcapi.h"
 #include "libpq/hba.h"
+#include "libpq/libpq-be.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -180,8 +181,43 @@ get_hba_options(HbaLine *hba)
 		return NULL;
 }
 
+/*
+ * Render an HBA protocol_mask as a comma-separated list of protocol names,
+ * e.g. "postgres,tds".  The result is palloc'd in the caller's context.
+ * The name table must track the CompatibilityProtocolKind enum in
+ * libpq-be.h; kinds without a name entry are skipped defensively.
+ */
+static char *
+protocol_mask_to_str(uint32 protocol_mask)
+{
+	static const char *const protocol_names[COMPAT_PROTOCOL_KIND_MAX] = {
+		[COMPAT_PROTOCOL_POSTGRES] = "postgres",
+		[COMPAT_PROTOCOL_MYSQL] = "mysql",
+		[COMPAT_PROTOCOL_TDS] = "tds",
+	};
+	StringInfoData buf;
+	bool		first = true;
+	int			i;
+
+	initStringInfo(&buf);
+	for (i = 0; i < COMPAT_PROTOCOL_KIND_MAX; i++)
+	{
+		if (protocol_mask & (1u << i))
+		{
+			if (protocol_names[i] == NULL)
+				continue;
+			if (!first)
+				appendStringInfoChar(&buf, ',');
+			appendStringInfoString(&buf, protocol_names[i]);
+			first = false;
+		}
+	}
+
+	return buf.data;
+}
+
 /* Number of columns in pg_hba_file_rules view */
-#define NUM_PG_HBA_FILE_RULES_ATTS	 11
+#define NUM_PG_HBA_FILE_RULES_ATTS	 12
 
 /*
  * fill_hba_line
@@ -368,6 +404,9 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 			values[index++] = PointerGetDatum(options);
 		else
 			nulls[index++] = true;
+
+		/* protocol */
+		values[index++] = CStringGetTextDatum(protocol_mask_to_str(hba->protocol_mask));
 	}
 	else
 	{

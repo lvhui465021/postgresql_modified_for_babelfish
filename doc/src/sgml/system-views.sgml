@@ -1429,6 +1429,18 @@ AND c1.path[c2.level] = c2.path[c2.level];
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>protocol</structfield> <type>text</type>
+      </para>
+      <para>
+       The application protocols this rule applies to, as a
+       comma-separated list of <literal>postgres</literal>,
+       <literal>mysql</literal> and/or <literal>tds</literal>,
+       or null if the rule could not be parsed
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>error</structfield> <type>text</type>
       </para>
       <para>
