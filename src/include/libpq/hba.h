@@ -92,12 +92,24 @@ typedef struct AuthToken
 	regex_t    *regex;
 } AuthToken;
 
+/*
+ * Default protocol_mask: match every protocol.  Defined as all-ones rather
+ * than computed from CompatibilityProtocolKind (whose definition lives in
+ * libpq-be.h, which this header must not include) so the default stays
+ * correct even if the set of protocol kinds grows later.
+ */
+#define HBA_PROTOCOL_MASK_ALL	((uint32) 0xFFFFFFFF)
+
 typedef struct HbaLine
 {
 	char	   *sourcefile;
 	int			linenumber;
 	char	   *rawline;
 	ConnType	conntype;
+	uint32		protocol_mask;	/* bit i set = matches CompatibilityProtocolKind i;
+								 * see libpq-be.h. Not CompatibilityProtocolKind
+								 * itself to avoid a circular include
+								 * (libpq-be.h already includes this file). */
 	List	   *databases;
 	List	   *roles;
 	struct sockaddr_storage addr;

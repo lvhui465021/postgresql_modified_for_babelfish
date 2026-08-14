@@ -783,6 +783,8 @@ mysql_perform_authentication(MysPacketState *ps, Port *port)
     shadow_pass = get_role_password(port->user_name, &logdetail);
     if (shadow_pass == NULL)
     {
+        if (ClientAuthentication_hook)
+            (*ClientAuthentication_hook) (port, STATUS_ERROR);
         ereport(FATAL,
                 (errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
                  errmsg("MySQL authentication failed for user \"%s\"",
@@ -799,6 +801,8 @@ mysql_perform_authentication(MysPacketState *ps, Port *port)
 
     if (auth_result != STATUS_OK)
     {
+        if (ClientAuthentication_hook)
+            (*ClientAuthentication_hook) (port, STATUS_ERROR);
         ereport(FATAL,
                 (errcode(ERRCODE_INVALID_PASSWORD),
                  errmsg("MySQL authentication failed for user \"%s\": password mismatch",

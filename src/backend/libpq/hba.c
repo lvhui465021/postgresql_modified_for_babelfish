@@ -1346,6 +1346,10 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 	parsedline->sourcefile = pstrdup(file_name);
 	parsedline->linenumber = line_num;
 	parsedline->rawline = pstrdup(tok_line->raw_line);
+	/* palloc0() zeroes protocol_mask; an unset "protocol=" option must mean
+	 * "match every protocol", not "match nothing", so set the all-ones
+	 * default here before any option parsing can override it. */
+	parsedline->protocol_mask = HBA_PROTOCOL_MASK_ALL;
 
 	/* Check the record type. */
 	Assert(tok_line->fields != NIL);
@@ -2508,6 +2512,53 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 		else
 			hbaline->oauth_skip_usermap = false;
 	}
+	else if (strcmp(name, "protocol") == 0)
+	{
+		List	   *parsed_kinds;
+		ListCell   *l;
+		char	   *dupval = pstrdup(val);
+		uint32		mask = 0;
+
+		if (!SplitGUCList(dupval, ',', &parsed_kinds))
+		{
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("could not parse protocol list \"%s\"", val),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, file_name)));
+			*err_msg = psprintf("could not parse protocol list \"%s\"", val);
+			return false;
+		}
+
+		foreach(l, parsed_kinds)
+		{
+			char	   *kind = (char *) lfirst(l);
+
+			if (pg_strcasecmp(kind, "postgres") == 0)
+				mask |= (1u << COMPAT_PROTOCOL_POSTGRES);
+			else if (pg_strcasecmp(kind, "mysql") == 0)
+				mask |= (1u << COMPAT_PROTOCOL_MYSQL);
+			else if (pg_strcasecmp(kind, "tds") == 0)
+				mask |= (1u << COMPAT_PROTOCOL_TDS);
+			else if (pg_strcasecmp(kind, "all") == 0)
+				mask |= HBA_PROTOCOL_MASK_ALL;
+			else
+			{
+				ereport(elevel,
+						(errcode(ERRCODE_CONFIG_FILE_ERROR),
+						 errmsg("invalid protocol \"%s\" in protocol option (must be postgres, mysql, tds, or all)",
+								kind),
+						 errcontext("line %d of configuration file \"%s\"",
+									line_num, file_name)));
+				*err_msg = psprintf("invalid protocol \"%s\" in protocol option", kind);
+				list_free(parsed_kinds);
+				return false;
+			}
+		}
+		list_free(parsed_kinds);
+
+		hbaline->protocol_mask = mask;
+	}
 	else
 	{
 		ereport(elevel,
@@ -2540,6 +2591,13 @@ check_hba(hbaPort *port)
 	foreach(line, parsed_hba_lines)
 	{
 		hba = (HbaLine *) lfirst(line);
+
+		/* Check compatibility protocol (PG/MySQL/TDS); skip line if it
+		 * doesn't govern this connection's protocol. port->protocol_kind is
+		 * stamped by postmaster from the listening socket at accept() time,
+		 * so it cannot be influenced by anything the client sends. */
+		if (!(hba->protocol_mask & (1u << port->protocol_kind)))
+			continue;
 
 		/* Check connection type */
 		if (hba->conntype == ctLocal)

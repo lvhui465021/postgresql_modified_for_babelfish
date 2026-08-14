@@ -28,9 +28,15 @@
 /*
  * OpenHalo's MySQL native-password secret format.  It stores
  * SHA1(SHA1(password)) as lowercase hexadecimal after this prefix.  The
- * format is deliberately not exposed through password_encryption: standard
- * PostgreSQL sessions must continue to use only PostgreSQL-supported secret
- * formats.
+ * format *is* exposed through password_encryption (see
+ * password_encryption_options in guc_tables.c, which lists
+ * "mysql_native_password"), so a session can set
+ * password_encryption = 'mysql_native_password' and have CREATE/ALTER ROLE
+ * store this format.  What it is not exposed to is PostgreSQL's own
+ * authentication paths: plain_crypt_verify() and CheckPWChallengeAuth()
+ * reject this PasswordType outright, so a role holding only this format
+ * cannot authenticate over a plain PostgreSQL (protocol_kind ==
+ * COMPAT_PROTOCOL_POSTGRES) connection.
  */
 #define MYSQL_NATIVE_PASSWORD_PREFIX "mysql_native_password:"
 #define MYSQL_NATIVE_PASSWORD_DIGEST_LENGTH    20
