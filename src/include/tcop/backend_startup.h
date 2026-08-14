@@ -44,7 +44,6 @@ typedef enum CAC_state
 typedef struct BackendStartupData
 {
 	CAC_state	canAcceptConnections;
-	ProtocolExtensionConfig *protocol_config; /* this will be used during backend initialization */
 
 	/*
 	 * Time at which the connection client socket is created. Only used for

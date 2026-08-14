@@ -108,7 +108,6 @@ extern void pgwin32_register_deadchild_callback(HANDLE procHandle, DWORD procId)
 #endif
 
 /* defined in globals.c */
-extern ProtocolExtensionConfig default_protocol_config;
 extern PGDLLIMPORT struct ClientSocket *MyClientSocket;
 
 /* prototypes for functions in launch_backend.c */

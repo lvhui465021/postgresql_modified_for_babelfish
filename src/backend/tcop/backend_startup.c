@@ -59,7 +59,7 @@ char	   *log_connections_string = NULL;
  */
 ConnectionTiming conn_timing = {.ready_for_use = TIMESTAMP_MINUS_INFINITY};
 
-static void BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionConfig *protocol_config);
+static void BackendInitialize(ClientSocket *client_sock, CAC_state cac);
 int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
 int	ProcessSSLStartup(Port *port);
 static void ProcessCancelRequestPacket(Port *port, void *pkt, int pktlen);
@@ -109,7 +109,7 @@ BackendMain(const void *startup_data, size_t startup_data_len)
 #endif
 
 	/* Perform additional initialization and collect startup packet */
-	BackendInitialize(MyClientSocket, bsdata->canAcceptConnections, bsdata->protocol_config);
+	BackendInitialize(MyClientSocket, bsdata->canAcceptConnections);
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory.  We must do this
@@ -126,18 +126,11 @@ BackendMain(const void *startup_data, size_t startup_data_len)
 	/*
 	 * Dispatch to the backend main loop.  ProtocolRoutine.mainfunc lets a
 	 * compatibility protocol replace the loop entirely; a NULL mainfunc
-	 * (the case for every protocol registered today, including MySQL,
-	 * which reuses PostgresMain via its read_command/process_command
-	 * hooks instead) means "use the standard PostgreSQL behaviour", per
-	 * the NULL-callback contract documented on ProtocolRoutine.  Without
-	 * this check, a future protocol that registers a mainfunc would never
-	 * actually have it called -- this file unconditionally ran the older,
-	 * Babelfish-native protocol_config->fn_mainfunc instead, exactly the
-	 * dispatch-missing bug class already fixed for ReportGUCOption
-	 * (guc.c), send_message_to_frontend (elog.c), and ProcessUtility
-	 * (utility.c).  TDS does not register a ProtocolRoutine, so
-	 * GetCurrentProtocolRoutine() returns the standard fallback routine
-	 * (mainfunc == NULL) for it too, preserving its existing behaviour.
+	 * means "use the standard PostgreSQL behaviour" (PostgresMain), per
+	 * the NULL-callback contract documented on ProtocolRoutine.  MySQL
+	 * keeps mainfunc NULL and reuses PostgresMain via its
+	 * read_command/process_command hooks; TDS registers its own mainfunc
+	 * (pe_mainfunc), which replaces the loop with the TDS batch engine.
 	 */
 	{
 		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
@@ -145,7 +138,7 @@ BackendMain(const void *startup_data, size_t startup_data_len)
 		if (routine != NULL && routine->mainfunc != NULL)
 			routine->mainfunc(MyProcPort);
 		else
-			(MyProcPort->protocol_config->fn_mainfunc)(MyProcPort);
+			PostgresMain(MyProcPort->database_name, MyProcPort->user_name);
 	}
 }
 
@@ -163,7 +156,7 @@ BackendMain(const void *startup_data, size_t startup_data_len)
  * but have not yet set up most of our local pointers to shmem structures.
  */
 static void
-BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionConfig *protocol_config)
+BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 {
 	int			status;
 	int			ret;
@@ -199,8 +192,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionCon
 	 * aren't in the postmaster process anymore.
 	 */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-	port = MyProcPort = (protocol_config->fn_init)(client_sock);
-	port->protocol_config = protocol_config;
+	port = MyProcPort = pq_init(client_sock);
 
 	/*
 	 * A compatibility protocol layered on top of the standard socket/SSL
@@ -321,18 +313,22 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionCon
 	enable_timeout_after(STARTUP_PACKET_TIMEOUT, AuthenticationTimeout * 1000);
 
 	/*
-	 * Handle protocol-specific direct SSL handshake.  Skipped for a
-	 * registered compatibility protocol that owns its whole startup
-	 * exchange (e.g. MySQL): this probe peeks a byte from the client to
-	 * detect a TLS ClientHello, but MySQL's wire protocol has the server
-	 * speak first, so the client has nothing queued yet and the peek
-	 * would block forever waiting for bytes that never arrive.
+	 * Handle protocol-specific direct SSL handshake.  A routine's
+	 * direct_ssl_handshake (e.g. TDS PRELOGIN) takes precedence; when it
+	 * is NULL, a routine that owns its whole startup exchange (e.g.
+	 * MySQL) skips the probe entirely -- the standard probe peeks a byte
+	 * from the client to detect a TLS ClientHello, but MySQL's wire
+	 * protocol has the server speak first, so the client has nothing
+	 * queued yet and the peek would block forever.
 	 */
 	if (port->protocol_routine != NULL &&
-		port->protocol_routine->startup_exchange != NULL)
+		port->protocol_routine->direct_ssl_handshake != NULL)
+		status = port->protocol_routine->direct_ssl_handshake(port);
+	else if (port->protocol_routine != NULL &&
+			 port->protocol_routine->startup_exchange != NULL)
 		status = STATUS_OK;
 	else
-		status = port->protocol_config->fn_direct_ssl_handshake(port);
+		status = ProcessSSLStartup(port);
 
 	/*
 	 * Receive the startup packet (which might turn out to be a cancel request
@@ -347,7 +343,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac, ProtocolExtensionCon
 			port->protocol_routine->startup_exchange != NULL)
 			status = port->protocol_routine->startup_exchange(port);
 		else
-			status = (port->protocol_config->fn_start)(port);
+			status = ProcessStartupPacket(port, false, false);
 	}
 
 	/*

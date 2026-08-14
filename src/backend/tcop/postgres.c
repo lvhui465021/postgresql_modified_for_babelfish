@@ -495,7 +495,7 @@ standard_ReadCommand(StringInfo inBuf)
 	if (whereToSendOutput == DestRemote)
 	{
 		Assert(MyProcPort != NULL);
-		result = MyProcPort->protocol_config->fn_read_command(inBuf);
+		result = SocketBackendReadCommand(inBuf);
 	}
 	else
 		result = InteractiveBackend(inBuf);
@@ -556,23 +556,11 @@ static void
 standard_CommReset(void)
 {
 	/*
-	 * Fusion regression fix: pre-fusion Babelfish called
-	 * protocol_config->fn_comm_reset() when set and did nothing otherwise
-	 * (a TDS connection's fn_comm_reset is NULL -- "not interested"; PG
-	 * connections' default_protocol_config always has fn_comm_reset =
-	 * libpq_comm_reset, so this is a no-op behavior change for them). The
-	 * refactor into this standalone function lost that check and always
-	 * ran pq_comm_reset(), silently applying PG's own comm-reset to a TDS
-	 * socket. pq_comm_reset() is only appropriate when there is no
-	 * protocol_config to consult at all (MyProcPort == NULL).
+	 * Reached only for the standard protocol: every other kind is routed
+	 * through ProtocolCommReset() above, and TDS (whose comm_reset is a
+	 * no-op) supplies its own routine member rather than falling through
+	 * to pq_comm_reset(), which would wrongly reset a TDS socket.
 	 */
-	if (MyProcPort)
-	{
-		if (MyProcPort->protocol_config->fn_comm_reset)
-			MyProcPort->protocol_config->fn_comm_reset();
-		return;
-	}
-
 	pq_comm_reset();
 }
 
@@ -600,16 +588,9 @@ static bool
 standard_IsReadingMessage(void)
 {
 	/*
-	 * See standard_CommReset()'s comment; same fusion regression. When
-	 * MyProcPort is set but its protocol has no fn_is_reading_msg (TDS),
-	 * report "not reading a message" rather than falling through to
-	 * pq_is_reading_msg(), which tracks libpq's own read state and has
-	 * nothing to do with a TDS connection's actual state.
+	 * Reached only for the standard protocol; TDS supplies its own
+	 * is_reading_msg routine member (see the note in standard_CommReset).
 	 */
-	if (MyProcPort)
-		return MyProcPort->protocol_config->fn_is_reading_msg != NULL &&
-			MyProcPort->protocol_config->fn_is_reading_msg();
-
 	return pq_is_reading_msg();
 }
 
@@ -653,19 +634,10 @@ static void
 standard_SendBackendKeyData(int pid, const uint8 *key, int keylen)
 {
 	/*
-	 * See standard_CommReset()'s comment; same fusion regression. A TDS
-	 * connection's fn_send_cancel_key is NULL ("not interested" -- TDS has
-	 * its own cancel mechanism), matching pre-fusion Babelfish's behavior
-	 * of doing nothing in that case rather than writing a raw PG
-	 * BackendKeyData packet onto the socket.
+	 * Reached only for the standard protocol; TDS keeps send_backend_key_data
+	 * NULL-equivalent by supplying its own no-op routine member (TDS has its
+	 * own cancel mechanism and must not receive a raw PG BackendKeyData).
 	 */
-	if (MyProcPort)
-	{
-		if (MyProcPort->protocol_config->fn_send_cancel_key)
-			MyProcPort->protocol_config->fn_send_cancel_key(pid, (char *) key, keylen);
-		return;
-	}
-
 	{
 		StringInfoData buf;
 
@@ -1620,10 +1592,7 @@ exec_simple_query(const char *query_string, const ParserRoutine *parser_routine)
 		 * command the client sent, regardless of rewriting. (But a command
 		 * aborted by error will not send an EndCommand report at all.)
 		 */
-		if (MyProcPort)
-			MyProcPort->protocol_config->fn_end_command(&qc, dest);
-		else
-			EndCommand(&qc, dest, false);
+		EndCommand(&qc, dest, false);
 
 		/* Now we may drop the per-parsetree context, if one was created. */
 		if (per_parsetree_context)
@@ -2614,10 +2583,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 		}
 
 		/* Send appropriate CommandComplete to client */
-		if (MyProcPort)
-			MyProcPort->protocol_config->fn_end_command(&qc, dest);
-		else
-			EndCommand(&qc, dest, false);
+		EndCommand(&qc, dest, false);
 	}
 	else
 	{
@@ -5028,10 +4994,7 @@ PostgresMain(const char *dbname, const char *username)
 							   (double) auth_duration / NS_PER_US));
 			}
 
-			if (MyProcPort && MyProcPort->protocol_config->fn_send_ready_for_query)
-				MyProcPort->protocol_config->fn_send_ready_for_query(whereToSendOutput);
-			else
-				ReadyForQuery(whereToSendOutput);
+			ReadyForQuery(whereToSendOutput);
 			send_ready_for_query = false;
 		}
 
@@ -5089,17 +5052,6 @@ PostgresMain(const char *dbname, const char *username)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		/*
-		 * If firstchar is EOF, then we need to disconnect, ortherwise
-		 * call the protocol hook to process the request.
-		 */
-		if (firstchar != EOF && MyProcPort &&
-			MyProcPort->protocol_config->fn_process_command)
-		{
-			firstchar = MyProcPort->protocol_config->fn_process_command();
-			send_ready_for_query = true;
-			continue;
-		}
 		/*
 		 * (7) process the command.  But ignore it if we're skipping till
 		 * Sync.

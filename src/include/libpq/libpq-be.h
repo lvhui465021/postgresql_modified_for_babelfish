@@ -104,37 +104,6 @@ typedef struct ClientSocket
 } ClientSocket;
 
 /*
- * ProtocolExtensionConfig
- *
- * 	All the callbacks implementing a specific wire protocol
- */
-typedef struct ProtocolExtensionConfig {
-	int		(*fn_accept)(pgsocket server_fd, ClientSocket *client_sock);
-	int		(*fn_close)(pgsocket server_fd);
-	struct Port*	(*fn_init)(ClientSocket *client_sock);
-	int		(*fn_start)(struct Port *port);
-	void	(*fn_authenticate)(struct Port *port, const char **username);
-	void	(*fn_mainfunc)(struct Port *port);
-	void	(*fn_send_message)(ErrorData *edata);
-	void	(*fn_send_cancel_key)(int pid, char *key, int key_len);
-	void	(*fn_comm_reset)(void);
-	bool	(*fn_is_reading_msg)(void);
-	void	(*fn_send_ready_for_query)(CommandDest dest);
-	int		(*fn_read_command)(StringInfo inBuf);
-	void	(*fn_end_command)(QueryCompletion *qc, CommandDest dest);
-	bool	(*fn_printtup)(TupleTableSlot *slot, DestReceiver *self);
-	void	(*fn_printtup_startup)(DestReceiver *self, int operation,
-								   TupleDesc typeinfo);
-	void	(*fn_printtup_shutdown)(DestReceiver *self);
-	void	(*fn_printtup_destroy)(DestReceiver *self);
-	int		(*fn_process_command)(void);
-	void	(*fn_report_param_status)(const char *name, char *val);
-
-	/* function pointer for handling direct SSL handshake */
-	int		(*fn_direct_ssl_handshake)(struct Port *port);
-} ProtocolExtensionConfig;
-
-/*
  * ClientConnectionInfo includes the fields describing the client connection
  * that are copied over to parallel workers as nothing from Port does that.
  * The same rules apply for allocations here as for Port (everything must be
@@ -199,7 +168,6 @@ typedef struct Port
 	int			remote_hostname_errcode;	/* see above */
 	char	   *remote_port;	/* text rep of remote port */
 
-	ProtocolExtensionConfig *protocol_config;	/* wire protocol functions */
 	CompatibilityProtocolKind protocol_kind; /* listener-selected wire protocol */
 	const struct ProtocolRoutine *protocol_routine; /* child-local routine */
 	/* local_host is filled only if needed (see log_status_format) */

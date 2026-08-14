@@ -203,13 +203,12 @@ ProtocolAuthenticate(Port *port)
 	const ProtocolRoutine *routine = port->protocol_routine;
 
 	/*
-	 * routine may legitimately be NULL here: a protocol extension that
-	 * dispatches entirely through its own ProtocolExtensionConfig (e.g.
-	 * TDS's protocol_config->fn_authenticate) instead of registering a
-	 * ProtocolRoutine never calls AssignProtocolRoutine() -- that is only
-	 * invoked from pq_init(), which such an extension does not go through.
-	 * Its own fn_authenticate runs the real exchange and this function is
-	 * never reached for that connection at all. See protocol_routine.h.
+	 * routine may legitimately be NULL here only before pq_init() has
+	 * resolved it; every connection goes through pq_init(), which calls
+	 * AssignProtocolRoutine(), so by the time InitPostgres runs the
+	 * routine is always set.  A registered non-standard kind without an
+	 * authenticate callback falls into the FATAL below rather than
+	 * silently running the standard exchange on the wrong framing.
 	 */
 	if (routine != NULL && routine->authenticate != NULL)
 	{
@@ -946,8 +945,32 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	else
 	{
 		/* normal multiuser case */
+		const ProtocolRoutine *routine;
+
 		Assert(MyProcPort != NULL);
-		(MyProcPort->protocol_config->fn_authenticate)(MyProcPort, &username);
+
+		/*
+		 * Run the wire-specific authentication exchange.  A NULL
+		 * authenticate callback means "use the standard PostgreSQL
+		 * exchange" (PerformAuthentication).  On return, port->user_name
+		 * carries the authenticated role name for every protocol.
+		 *
+		 * PerformAuthentication() clears ClientAuthInProgress at its end;
+		 * a vtable authenticate callback replaces the whole exchange, so
+		 * clear the flag here as well -- otherwise message-level filtering
+		 * (should_output_to_client) keeps suppressing NOTICE/WARNING on
+		 * the wire for the rest of the session.
+		 */
+		routine = GetCurrentProtocolRoutine();
+		if (routine != NULL && routine->authenticate != NULL)
+		{
+			routine->authenticate(MyProcPort);
+			ClientAuthInProgress = false;
+		}
+		else
+			PerformAuthentication(MyProcPort);
+		username = MyProcPort->user_name;
+
 		InitializeSessionUserId(username, useroid, false);
 		/* ensure that auth_method is actually valid, aka authn_id is not NULL */
 		if (MyClientConnectionInfo.authn_id)

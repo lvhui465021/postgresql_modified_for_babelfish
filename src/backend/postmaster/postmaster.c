@@ -244,28 +244,7 @@ static int	NumListenSockets = 0;
 static pgsocket *ListenSockets = NULL;
 static CompatibilityProtocolKind *ListenSocketProtocolKinds = NULL;
 
-/* The wire protocol callbacks to use for those server sockets. */
-static ProtocolExtensionConfig *ListenConfig[MAXLISTEN];
 
-ProtocolExtensionConfig default_protocol_config = {
-	libpq_accept,
-	libpq_close,
-	libpq_init,
-	libpq_start,
-	libpq_authenticate,
-	libpq_mainfunc,
-	libpq_send_message,
-	libpq_send_cancel_key,
-	libpq_comm_reset,
-	libpq_is_reading_msg,
-	libpq_send_ready_for_query,
-	libpq_read_command,
-	libpq_end_command,
-	NULL, NULL, NULL, NULL,		/* use libpq defaults for printtup*() */
-	NULL,
-	libpq_report_param_status,
-	libpq_direct_ssl_handshake
-};
 
 /* still more option variables */
 bool		EnableSSL = false;
@@ -468,7 +447,7 @@ static void PostmasterStateMachine(void);
 static void UpdatePMState(PMState newState);
 
 static int	ServerLoop(void);
-static int	BackendStartup(ClientSocket *client_sock, ProtocolExtensionConfig *protocol_config);
+static int	BackendStartup(ClientSocket *client_sock);
 static void report_fork_failure_to_client(ClientSocket *client_sock, int errnum);
 static CAC_state canAcceptConnections(BackendType backend_type);
 static void signal_child(PMChild *pmchild, int signal);
@@ -1517,107 +1496,6 @@ InitializeProtocolListeners(void)
 		listen_init_hook();
 }
 
-int
-libpq_accept(pgsocket server_fd, ClientSocket *client_sock)
-{
-	return AcceptConnection(server_fd, client_sock);
-}
-
-int
-libpq_close(pgsocket server_fd)
-{
-	return closesocket(server_fd);
-}
-
-Port*
-libpq_init(ClientSocket *client_sock)
-{
-	return pq_init(client_sock);
-}
-
-int
-libpq_start(Port *port)
-{
-	return ProcessStartupPacket(port, false, false);
-}
-
-void
-libpq_authenticate(Port *port, const char **username)
-{
-	PerformAuthentication(port);
-}
-
-void
-libpq_mainfunc(Port *port)
-{
-	PostgresMain(port->database_name, port->user_name);
-}
-
-void
-libpq_send_message(ErrorData *edata)
-{
-	send_message_to_frontend(edata);
-}
-
-void
-libpq_send_cancel_key(int pid, char *key, int key_len)
-{
-	StringInfoData buf;
-
-	pq_beginmessage(&buf, 'K');
-	pq_sendint32(&buf, (int32) pid);
-	pq_sendbytes(&buf, key, key_len);
-	pq_endmessage(&buf);
-	/* Need not flush since ReadyForQuery will do it. */
-
-}
-
-void
-libpq_report_param_status(const char *name, char *val)
-{
-	StringInfoData msgbuf;
-
-	pq_beginmessage(&msgbuf, 'S');
-	pq_sendstring(&msgbuf, name);
-	pq_sendstring(&msgbuf, val);
-	pq_endmessage(&msgbuf);
-}
-
-void
-libpq_comm_reset(void)
-{
-	pq_comm_reset();
-}
-
-bool
-libpq_is_reading_msg(void)
-{
-	return pq_is_reading_msg();
-}
-
-void
-libpq_send_ready_for_query(CommandDest dest)
-{
-	ReadyForQuery(dest);
-}
-
-int
-libpq_read_command(StringInfo inBuf)
-{
-	return SocketBackendReadCommand(inBuf);
-}
-
-void
-libpq_end_command(QueryCompletion *qc, CommandDest dest)
-{
-	EndCommand(qc, dest, false);
-}
-
-int
-libpq_direct_ssl_handshake(struct Port *port)
-{
-	return ProcessSSLStartup(port);
-}
 
 /*
  * on_proc_exit callback to close server's listen sockets
@@ -1634,10 +1512,13 @@ CloseServerPorts(int status, Datum arg)
 	 * condition if a new postmaster wants to re-use the TCP port number.
 	 */
 	for (i = 0; i < NumListenSockets; i++) {
-		if ((ListenConfig[i]->fn_close)(ListenSockets[i]) != 0)
-			elog(LOG, "could not close listen socket: %m");
+		const ProtocolRoutine *routine =
+			GetProtocolRoutine(ListenSocketProtocolKinds[i]);
 
-		ListenConfig[i] = NULL;
+		if (routine != NULL && routine->close != NULL ?
+			routine->close(ListenSockets[i]) != 0 :
+			closesocket(ListenSockets[i]) != 0)
+			elog(LOG, "could not close listen socket: %m");
 	}
 	NumListenSockets = 0;
 	if (ListenSocketProtocolKinds != NULL)
@@ -1736,29 +1617,24 @@ listen_have_free_slot(void)
 }
 
 void
-listen_add_socket(pgsocket fd, ProtocolExtensionConfig *protocol_config)
+listen_add_socket(pgsocket fd)
 {
 	/* Caller must have checked with listen_have_free_slot() before */
 	Assert(NumListenSockets < MAXLISTEN);
 
-	if (protocol_config == NULL)
-		protocol_config = &default_protocol_config;
-
 	ListenSockets[NumListenSockets] = fd;
-	ListenConfig[NumListenSockets] = protocol_config;
+	/* ListenSocketProtocolKinds is palloc0'd: POSTGRES (0) by default */
 	(NumListenSockets)++;
 }
 
 /*
  * listen_add_protocol_socket -- listen_add_socket() plus a
- * CompatibilityProtocolKind stamp, for protocol extensions (e.g. TDS) that
- * open their own listener sockets and register a ProtocolExtensionConfig
- * but never a ProtocolRoutine.  See the header comment in
- * protocol_extension.h.
+ * CompatibilityProtocolKind stamp.  ServerLoop resolves the socket's
+ * accept/close callbacks from the ProtocolRoutine registered for kind
+ * (see protocol_extension.h and protocol_routine.h).
  */
 void
-listen_add_protocol_socket(pgsocket fd, ProtocolExtensionConfig *protocol_config,
-							CompatibilityProtocolKind kind)
+listen_add_protocol_socket(pgsocket fd, CompatibilityProtocolKind kind)
 {
 	int			idx = NumListenSockets;
 
@@ -1768,7 +1644,7 @@ listen_add_protocol_socket(pgsocket fd, ProtocolExtensionConfig *protocol_config
 
 	Assert(ListenSocketProtocolKinds != NULL);
 
-	listen_add_socket(fd, protocol_config);
+	listen_add_socket(fd);
 
 	ListenSocketProtocolKinds[idx] = kind;
 }
@@ -1909,7 +1785,7 @@ ConfigurePostmasterWaitSet(bool accept_connections)
 	{
 		for (int i = 0; i < NumListenSockets; i++)
 			AddWaitEventToSet(pm_wait_set, WL_SOCKET_ACCEPT, ListenSockets[i],
-							  NULL, ListenConfig[i]);
+							  NULL, NULL);
 	}
 }
 
@@ -1965,30 +1841,43 @@ ServerLoop(void)
 			if (events[i].events & WL_SOCKET_ACCEPT)
 			{
 				ClientSocket s;
+				CompatibilityProtocolKind kind;
+				const ProtocolRoutine *routine;
+				int			status;
 
-				/* Get the index of the socket in ListenSocket/ListenConfig arrays */
+				/* Get the index of the socket in the ListenSockets array */
 	 			int	listen_index = events[i].pos - 1;
 	  
 	 			Assert(listen_index >= 0 && listen_index < MAXLISTEN
 	 					&& ListenSockets[listen_index] == events[i].fd);
 
-				if ((ListenConfig[listen_index]->fn_accept)(events[i].fd, &s) == STATUS_OK)
+				/*
+				 * ListenSocketProtocolKinds is kept in lockstep with
+				 * ListenSockets by listen_add_socket(), so the same
+				 * listen_index that selects the accept/close callbacks
+				 * also selects the compatibility dialect for this
+				 * connection.
+				 */
+				kind = ListenSocketProtocolKinds[listen_index];
+				routine = GetProtocolRoutine(kind);
+
+				if (routine != NULL && routine->accept != NULL)
+					status = routine->accept(events[i].fd, &s);
+				else
+					status = AcceptConnection(events[i].fd, &s);
+
+				if (status == STATUS_OK)
 				{
-					/*
-					 * ListenSocketProtocolKinds is kept in lockstep with
-					 * ListenSockets/ListenConfig by listen_add_socket(), so
-					 * the same listen_index that selects the accept/close
-					 * callbacks above also selects the compatibility
-					 * dialect for this connection.
-					 */
-					s.protocol_kind = ListenSocketProtocolKinds[listen_index];
-					BackendStartup(&s, ListenConfig[listen_index]);
+					s.protocol_kind = kind;
+					BackendStartup(&s);
 				}
 
 				/* We no longer need the open socket in this process */
 				if (s.sock != PGINVALID_SOCKET)
 				{
-					if ((ListenConfig[listen_index]->fn_close)(s.sock) != 0)
+					if (routine != NULL && routine->close != NULL ?
+						routine->close(s.sock) != 0 :
+						closesocket(s.sock) != 0)
 						elog(LOG, "could not close client socket: %m");
 				}
 			}
@@ -2172,10 +2061,13 @@ ClosePostmasterPorts(bool am_syslogger)
 	if (ListenSockets)
 	{
 		for (int i = 0; i < NumListenSockets; i++) {
-			if ((ListenConfig[i]->fn_close)(ListenSockets[i]) != 0)
+			const ProtocolRoutine *routine =
+				GetProtocolRoutine(ListenSocketProtocolKinds[i]);
+
+			if (routine != NULL && routine->close != NULL ?
+				routine->close(ListenSockets[i]) != 0 :
+				closesocket(ListenSockets[i]) != 0)
 				elog(LOG, "could not close listen socket: %m");
-			
-			ListenConfig[i] = NULL;
 		}
 		pfree(ListenSockets);
 	}
@@ -3821,7 +3713,7 @@ TerminateChildren(int signal)
  * StartBackgroundWorker.
  */
 static int
-BackendStartup(ClientSocket *client_sock, ProtocolExtensionConfig *protocol_config)
+BackendStartup(ClientSocket *client_sock)
 {
 	PMChild    *bn = NULL;
 	pid_t		pid;
@@ -3867,7 +3759,6 @@ BackendStartup(ClientSocket *client_sock, ProtocolExtensionConfig *protocol_conf
 
 	/* Pass down canAcceptConnections state */
 	startup_data.canAcceptConnections = cac;
-	startup_data.protocol_config = protocol_config;
 	bn->rw = NULL;
 
 	/* Hasn't asked to be notified about any bgworkers yet */
@@ -4754,92 +4645,6 @@ PostmasterMarkPIDForWorkerNotify(int pid)
 	return false;
 }
 
-// int
-// libpq_accept(pgsocket server_fd, Port *port)
-// {
-// 	return StreamConnection(server_fd, port);
-// }
-
-// void
-// libpq_close(pgsocket server_fd)
-// {
-// 	StreamClose(server_fd);
-// }
-
-// void
-// libpq_init(void)
-// {
-// 	pq_init();
-// }
-
-// int
-// libpq_start(Port *port)
-// {
-// 	return ProcessStartupPacket(port, false, false);
-// }
-
-// void
-// libpq_authenticate(Port *port, const char **username)
-// {
-// 	PerformAuthentication(port);
-// }
-
-// void
-// libpq_mainfunc(Port *port, int argc, char *argv[])
-// {
-// 	PostgresMain(argc, argv, port->database_name,
-// 				 port->database_oid? atooid(port->database_oid) : InvalidOid,
-// 				 port->user_name);
-// }
-
-// void
-// libpq_send_message(ErrorData *edata)
-// {
-// 	send_message_to_frontend(edata);
-// }
-
-// void
-// libpq_send_cancel_key(int pid, int32 key)
-// {
-// 	StringInfoData buf;
-
-// 	pq_beginmessage(&buf, 'K');
-// 	pq_sendint32(&buf, (int32) pid);
-// 	pq_sendint32(&buf, (int32) key);
-// 	pq_endmessage(&buf);
-// 	/* Need not flush since ReadyForQuery will do it. */
-
-// }
-
-// void
-// libpq_comm_reset(void)
-// {
-// 	pq_comm_reset();
-// }
-
-// bool
-// libpq_is_reading_msg(void)
-// {
-// 	return pq_is_reading_msg();
-// }
-
-// void
-// libpq_send_ready_for_query(CommandDest dest)
-// {
-// 	ReadyForQuery(dest);
-// }
-
-// int
-// libpq_read_command(StringInfo inBuf)
-// {
-// 	return SocketBackendReadCommand(inBuf);
-// }
-
-// void
-// libpq_end_command(QueryCompletion *qc, CommandDest dest)
-// {
-// 	EndCommand(qc, dest, false);
-// }
 
 #ifdef WIN32
 

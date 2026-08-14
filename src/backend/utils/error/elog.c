@@ -1739,9 +1739,8 @@ EmitErrorReport(void)
 		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();
 
 		/*
-		 * Never fall through to PostgreSQL ErrorResponse/protocol_config
-		 * framing for a compatibility socket (MySQL, and eventually TDS
-		 * once it registers a ProtocolRoutine).  During error reporting it
+		 * Never fall through to PostgreSQL ErrorResponse framing for a
+		 * compatibility socket (MySQL, TDS).  During error reporting it
 		 * is safer to close a broken compatibility session without a
 		 * client packet than to corrupt its protocol stream with a raw PG
 		 * 'E'/'N' message -- see the identical fix in guc.c's
@@ -1752,8 +1751,6 @@ EmitErrorReport(void)
 			if (routine->send_error != NULL)
 				routine->send_error(edata);
 		}
-		else if (MyProcPort)
-			MyProcPort->protocol_config->fn_send_message(edata);
 		else
 			send_message_to_frontend(edata);
 	}

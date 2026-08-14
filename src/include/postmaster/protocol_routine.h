@@ -97,31 +97,35 @@ typedef struct ProtocolRoutine
 
     /* --- authentication hook --- */
     void        (*authenticate)(Port *port);
+
+    /* --- postmaster-side listener/socket hooks (NULL = standard) --- */
+    int         (*accept)(pgsocket server_fd, ClientSocket *client_sock);
+    int         (*close)(pgsocket server_fd);
+
+    /*
+     * direct_ssl_handshake -- run a protocol-specific pre-startup SSL
+     * handshake (TDS PRELOGIN).  NULL means "use the standard
+     * ProcessSSLStartup() probe"; when set it takes precedence over
+     * startup_exchange for that phase only.
+     */
+    int         (*direct_ssl_handshake)(Port *port);
 } ProtocolRoutine;
 
 /*
- * A Port's protocol_kind and protocol_routine are set independently, and
- * "protocol_kind != COMPAT_PROTOCOL_POSTGRES with no ProtocolRoutine
- * registered for that kind" is a valid, intentional state -- it is not
- * synonymous with "unrecognized protocol" or "dispatch bug".
- *
+ * A Port's protocol_kind and protocol_routine are resolved together:
  * protocol_kind is stamped by the postmaster at accept() time from the
  * listener socket the connection arrived on (see ServerLoop() in
- * postmaster.c and listen_add_protocol_socket() in protocol_extension.h).
- * protocol_routine is resolved from protocol_kind separately, by
- * AssignProtocolRoutine(), but that function is only ever called from
- * pq_init() -- the kernel's own libpq connection-setup path.
+ * postmaster.c and listen_add_protocol_socket() in protocol_extension.h),
+ * and protocol_routine is resolved from protocol_kind by
+ * AssignProtocolRoutine(), which pq_init() calls for every connection.
+ * A non-standard kind therefore always has a registered ProtocolRoutine
+ * by the time the backend starts; AssignProtocolRoutine() FATALs rather
+ * than silently continuing if a kind has no registered routine.
  *
- * A protocol extension that dispatches entirely through its own
- * ProtocolExtensionConfig (protocol_extension.h) rather than registering a
- * ProtocolRoutine -- TDS is the current example -- never goes through
- * pq_init(), so AssignProtocolRoutine() never runs for its connections and
- * port->protocol_routine stays NULL for the life of the backend. This is by
- * design: GetCurrentProtocolRoutine() falls back to the standard PostgreSQL
- * routine for exactly this case, and every kernel call site that consults
- * it (or port->protocol_routine directly, e.g. ProtocolAuthenticate() in
- * postinit.c) must check for NULL and fall through rather than assume a
- * routine exists whenever protocol_kind is non-standard.
+ * The old ProtocolExtensionConfig mechanism (Babelfish's parallel
+ * per-protocol dispatch table) is gone: its TDS user now registers a
+ * ProtocolRoutine like every other dialect, and the postmaster resolves
+ * listener accept/close through the same registry.
  */
 
 /* ----------------------------------------------------------------

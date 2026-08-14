@@ -25,39 +25,17 @@ extern	PGDLLEXPORT listen_init_hook_type listen_init_hook;
 
 /* Functions in postmaster.c */
 extern PGDLLEXPORT int	listen_have_free_slot(void);
-extern PGDLLEXPORT void	listen_add_socket(pgsocket fd,
-								ProtocolExtensionConfig *protocol_config);
+extern PGDLLEXPORT void	listen_add_socket(pgsocket fd);
 
 /*
  * listen_add_protocol_socket -- like listen_add_socket(), but also stamps
  * the new socket's CompatibilityProtocolKind so that ServerLoop's accept
  * dispatch (see postmaster.c) sets Port->protocol_kind correctly for
- * connections accepted on it.
- *
- * Unlike ListenProtocolServerPort() (protocol_routine.h), this does NOT
- * require a ProtocolRoutine to be registered for kind -- a protocol
- * extension that dispatches entirely through its own ProtocolExtensionConfig
- * (protocol_config), never through the kernel's ProtocolRoutine vtable, is a
- * valid, intentional configuration.  See protocol_routine.h for details.
+ * connections accepted on it.  The accept/close callbacks for the socket
+ * are resolved from the ProtocolRoutine registered for kind
+ * (see protocol_routine.h).
  */
 extern PGDLLEXPORT void	listen_add_protocol_socket(pgsocket fd,
-								ProtocolExtensionConfig *protocol_config,
 								CompatibilityProtocolKind kind);
-
-extern int	libpq_accept(pgsocket server_fd, ClientSocket *client_sock);
-extern int	libpq_close(pgsocket server_fd);
-extern Port	*libpq_init(ClientSocket *client_sock);
-extern int	libpq_start(Port *port);
-extern void	libpq_authenticate(Port *port, const char **username);
-pg_noreturn extern void	libpq_mainfunc(Port *port);
-extern void	libpq_send_message(ErrorData *edata);
-extern void	libpq_send_cancel_key(int pid, char *key, int key_len);
-extern void	libpq_comm_reset(void);
-extern bool	libpq_is_reading_msg(void);
-extern void	libpq_send_ready_for_query(CommandDest dest);
-extern int	libpq_read_command(StringInfo inBuf);
-extern void	libpq_end_command(QueryCompletion *qc, CommandDest dest);
-extern void	libpq_report_param_status(const char *name, char *val);
-extern int	libpq_direct_ssl_handshake(struct Port *port);
 
 #endif							/* _PROTOCOL_EXTENSION_H */

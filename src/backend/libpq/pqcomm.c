@@ -669,7 +669,7 @@ ListenServerPort(int family, const char *hostName, unsigned short portNumber,
 					(errmsg("listening on %s address \"%s\", port %d",
 							familyDesc, addrDesc, (int) portNumber)));
 
-		listen_add_socket(fd, NULL);
+		listen_add_socket(fd);
 		added++;
 	}
 

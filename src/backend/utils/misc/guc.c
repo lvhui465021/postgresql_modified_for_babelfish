@@ -2673,20 +2673,25 @@ ReportGUCOption(struct config_generic *record)
 
 		/*
 		 * ParameterStatus is PostgreSQL framing.  A compatibility routine
-		 * (MySQL, and eventually TDS once it registers a ProtocolRoutine)
-		 * must explicitly encode it or intentionally ignore it; it must
-		 * never leak a raw PG 'S' packet onto another protocol's socket.
-		 * Connections with no ProtocolRoutine registered for their kind
-		 * (plain PostgreSQL, and Babelfish's own protocol_config-based TDS
-		 * listener) keep using protocol_config, exactly as before.
+		 * (MySQL, TDS) must explicitly encode it or intentionally ignore it;
+		 * it must never leak a raw PG 'S' packet onto another protocol's
+		 * socket.  Only plain PostgreSQL connections fall through to the
+		 * standard encoding below.
 		 */
 		if (routine != NULL && routine->kind != COMPAT_PROTOCOL_POSTGRES)
 		{
 			if (routine->report_parameter_status != NULL)
 				routine->report_parameter_status(record->name, val);
 		}
-		else if (MyProcPort && MyProcPort->protocol_config->fn_report_param_status)
-			(MyProcPort->protocol_config->fn_report_param_status)(record->name, val);
+		else
+		{
+			StringInfoData msgbuf;
+
+			pq_beginmessage(&msgbuf, PqMsg_ParameterStatus);
+			pq_sendstring(&msgbuf, record->name);
+			pq_sendstring(&msgbuf, val);
+			pq_endmessage(&msgbuf);
+		}
 
 		/*
 		 * We need a long-lifespan copy.  If guc_strdup() fails due to OOM,
