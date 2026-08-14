@@ -61,3 +61,11 @@ RegisterCompatibilityProtocol(CompatibilityProtocolKind kind,
 	Assert(compatibility_kind_is_valid(kind));
 	compatibility_routines[kind].protocol = routine;
 }
+
+void
+RegisterListenInitRoutine(CompatibilityProtocolKind kind,
+						   void (*routine) (void))
+{
+	Assert(compatibility_kind_is_valid(kind));
+	compatibility_routines[kind].listen_init = routine;
+}

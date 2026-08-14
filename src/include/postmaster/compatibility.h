@@ -28,6 +28,14 @@ typedef struct CompatibilityRoutine
 	const struct ParserRoutine  *parser;
 	const struct ADTExtMethod   *adtext;
 	const struct ProtocolRoutine *protocol;
+
+	/*
+	 * listen_init -- called once during postmaster startup so this dialect
+	 * can open its listener socket(s).  The postmaster invokes the slots in
+	 * protocol-kind order, so startup is deterministic regardless of
+	 * shared_preload_libraries order; NULL means "no loadable listener".
+	 */
+	void		(*listen_init) (void);
 } CompatibilityRoutine;
 
 extern const CompatibilityRoutine *GetCompatibilityRoutine(
@@ -40,5 +48,7 @@ extern void RegisterCompatibilityADTExt(CompatibilityProtocolKind kind,
 extern void UnregisterCompatibilityADTExt(CompatibilityProtocolKind kind);
 extern void RegisterCompatibilityProtocol(CompatibilityProtocolKind kind,
 									  const struct ProtocolRoutine *routine);
+extern void RegisterListenInitRoutine(CompatibilityProtocolKind kind,
+								   void (*routine) (void));
 
 #endif						/* COMPATIBILITY_H */

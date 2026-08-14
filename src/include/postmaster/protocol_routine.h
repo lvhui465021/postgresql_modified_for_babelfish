@@ -146,10 +146,17 @@ extern int  ListenProtocolServerPort(CompatibilityProtocolKind kind, int family,
 									 const char *unixSocketName);
 
 /*
- * listen_init_hook -- invoked during postmaster startup so that additional
- * wire-protocol listeners (MySQL, TDS, ...) can register their protocol
- * routine and open their listener socket.  Built-in protocols are started
- * directly by the postmaster; extensions set this hook in their _PG_init.
+ * listen_init_hook -- legacy single-pointer hook invoked during postmaster
+ * startup so that additional wire-protocol listeners (MySQL, TDS, ...) can
+ * open their listener socket.  Built-in protocols are started directly by
+ * the postmaster; extensions set this hook in their _PG_init.
+ *
+ * Deprecated: prefer RegisterListenInitRoutine() (compatibility.h), which
+ * stores the callback in the per-dialect CompatibilityRoutine registry and
+ * is invoked in protocol-kind order.  This global is kept only so modules
+ * compiled against the old symbol keep working; the postmaster calls it
+ * once, after the per-kind slots, so legacy users no longer need to save
+ * and chain it themselves.
  */
 typedef void (*listen_init_hook_type) (void);
 extern PGDLLEXPORT listen_init_hook_type listen_init_hook;

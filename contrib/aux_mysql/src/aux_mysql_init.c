@@ -28,6 +28,7 @@
 #include "libpq/libpq-be.h"
 #include "miscadmin.h"
 #include "parser/parsereng.h"
+#include "postmaster/compatibility.h"
 #include "postmaster/protocol_routine.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -45,22 +46,12 @@ PG_MODULE_MAGIC;
  */
 
 /*
- * listen_init_hook is a single global function pointer, not a registry: if
- * another loadable module (e.g. a TDS or other compatibility listener)
- * already claimed it before us, overwriting it without calling through
- * would silently disable that module's listener. Save the previous value
- * and chain to it so listener registration composes regardless of module
- * load order (mirrors babelfishpg_tds's identical fix on the Babelfish
- * side, tds_srv.c's pe_listen_init()).
- */
-static listen_init_hook_type prev_listen_init;
-
-/*
  * mysql_listen_init
  *
- * Open the MySQL TCP listener from postmaster startup.  Called via
- * listen_init_hook; ListenProtocolServerPort() (kernel) registers the
- * socket with the postmaster's wait set.
+ * Open the MySQL TCP listener from postmaster startup.  Registered via
+ * RegisterListenInitRoutine() in _PG_init and invoked by the postmaster
+ * in protocol-kind order; ListenProtocolServerPort() (kernel) registers
+ * the socket with the postmaster's wait set.
  */
 static void
 mysql_listen_init(void)
@@ -94,13 +85,6 @@ mysql_listen_init(void)
 			ereport(LOG,
 					(errmsg("could not create MySQL listener on any address")));
 	}
-
-	/* Chain to whatever listen_init_hook was already registered (see the
-	 * comment on prev_listen_init above) regardless of whether MySQL's own
-	 * listener is enabled -- a disabled MySQL listener must not disable
-	 * another module's listener that registered before us. */
-	if (prev_listen_init != NULL)
-		prev_listen_init();
 }
 
 /*
@@ -136,6 +120,5 @@ _PG_init(void)
 	InitMysCtasHook();
 
 	/* Open the MySQL listener from postmaster startup. */
-	prev_listen_init = listen_init_hook;
-	listen_init_hook = mysql_listen_init;
+	RegisterListenInitRoutine(COMPAT_PROTOCOL_MYSQL, mysql_listen_init);
 }

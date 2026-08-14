@@ -102,6 +102,7 @@
 #include "pgstat.h"
 #include "port/pg_bswap.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/compatibility.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/pgarch.h"
@@ -1489,11 +1490,28 @@ ListenProtocolServerPort(CompatibilityProtocolKind kind, int family,
 static void
 InitializeProtocolListeners(void)
 {
+	int			i;
+
 	/*
 	 * Built-in protocol listeners are opened directly above.  Loadable
-	 * compatibility listeners (MySQL, TDS, ...) register their protocol
-	 * routine and open their listener socket here via listen_init_hook;
-	 * the MySQL listener moved to the aux_mysql module.
+	 * compatibility listeners (MySQL, TDS, ...) register a listen_init
+	 * routine in their CompatibilityRoutine slot and open their listener
+	 * socket here, in protocol-kind order, so startup is deterministic
+	 * regardless of shared_preload_libraries order.
+	 */
+	for (i = 0; i < COMPAT_PROTOCOL_KIND_MAX; i++)
+	{
+		const CompatibilityRoutine *routine = GetCompatibilityRoutine(i);
+
+		if (routine != NULL && routine->listen_init != NULL)
+			routine->listen_init();
+	}
+
+	/*
+	 * Legacy single-pointer hook, kept only as a compatibility shim for
+	 * loadable modules compiled against the old listen_init_hook symbol.
+	 * It runs after the per-kind slots; new code should use
+	 * RegisterListenInitRoutine() instead of saving/chaining this hook.
 	 */
 	if (listen_init_hook != NULL)
 		listen_init_hook();
