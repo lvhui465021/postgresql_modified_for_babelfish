@@ -519,19 +519,31 @@ ProcessUtility(PlannedStmt *pstmt,
 	 * control when ProcessUtility is called.  Such a plugin would normally
 	 * call standard_ProcessUtility().
 	 *
+	 * Dispatch precedence (a key fusion invariant, see commit 4795343644):
+	 * an explicitly-registered non-PG ProtocolRoutine first, then the
+	 * global ProcessUtility_hook, then the PG-kind routine's own
+	 * process_utility slot, then standard_ProcessUtility().
+	 *
 	 * ProcessUtility_hook is a single global set once by whichever loadable
-	 * module installs it (Babelfish's T-SQL support), independent of which
-	 * dialect the *current* connection actually speaks.  When both a MySQL
-	 * listener (openHalo, dispatched via GetCurrentProtocolRoutine()) and a
-	 * T-SQL listener (Babelfish, dispatched via ProcessUtility_hook) are
+	 * module installs it, independent of which dialect the *current*
+	 * connection actually speaks.  When both a MySQL listener (openHalo,
+	 * dispatched via GetCurrentProtocolRoutine()) and a T-SQL listener are
 	 * loaded in the same cluster, a MySQL connection would otherwise run
 	 * every DDL statement through Babelfish's T-SQL-aware ProcessUtility_hook
 	 * instead of MySQL's, which doesn't recognize MySQL-specific parse nodes
 	 * (e.g. CONSTR_AUTOINC) -- so check for an explicitly-registered non-PG
-	 * ProtocolRoutine first, and only fall back to ProcessUtility_hook for
-	 * connections that don't have one (standard PG and, currently, T-SQL/TDS,
-	 * which doesn't register into this vtable and so resolves to the
-	 * COMPAT_PROTOCOL_POSTGRES StandardProtocolRoutine).
+	 * ProtocolRoutine first.
+	 *
+	 * TDS connections now register into this vtable: babelfishpg_tsql wires
+	 * bbf_ProcessUtility into the TDS routine's process_utility slot at
+	 * login via SetProtocolRoutineProcessUtility(), so T-SQL DDL dispatch is
+	 * resolved from protocol_kind rather than the global singleton.
+	 * ProcessUtility_hook remains the carrier for PG-protocol connections
+	 * in a Babelfish cluster (T-SQL view-def blocking, ALTER OWNER
+	 * restrictions, DROP handling): the PG kind's own routine has a NULL
+	 * process_utility, and the hook chain (bbf_ProcessUtility ->
+	 * tdsutils_ProcessUtility) is exactly what those connections ran before
+	 * the vtable wiring existed.
 	 */
 	{
 		const ProtocolRoutine *routine = GetCurrentProtocolRoutine();

@@ -56,8 +56,13 @@ typedef enum ProtocolCommandResult
  *    than NULL to satisfy the contract.
  *  - The five simple-query multi-statement policy fields
  *    (allow_multi_statements .. capture_session_state) and parser_routine
- *    /process_utility are legitimately NULL for a protocol that does not
- *    use the PG simple-query path or the raw-parse/DDL dispatch points.
+ *    are legitimately NULL for a protocol that does not use the PG
+ *    simple-query path or the raw-parse dispatch point.  process_utility
+ *    may start out NULL and be wired after registration via
+ *    SetProtocolRoutineProcessUtility() when its implementation lives in
+ *    a library that loads later than the registrar (TDS: the routine is
+ *    registered by babelfishpg_tds at preload, the T-SQL DDL dispatcher by
+ *    babelfishpg_tsql at login).
  * ----------------------------------------------------------------
  */
 typedef struct ProtocolRoutine
@@ -149,6 +154,17 @@ extern const ProtocolRoutine *GetProtocolRoutine(CompatibilityProtocolKind kind)
 extern void   AssignProtocolRoutine(Port *port);
 extern void   RegisterProtocolRoutine(const ProtocolRoutine *routine);
 extern bool   CompatibilityProtocolKindIsValid(CompatibilityProtocolKind kind);
+
+/*
+ * SetProtocolRoutineProcessUtility -- update a registered protocol's
+ * process_utility slot after registration.  Used when the slot's
+ * implementation lives in a library that loads after the registrar
+ * (T-SQL's bbf_ProcessUtility in babelfishpg_tsql vs. the TDS
+ * ProtocolRoutine registered by babelfishpg_tds).  fn == NULL restores
+ * the registered value.  No-op for a kind with no registered routine.
+ */
+extern void SetProtocolRoutineProcessUtility(CompatibilityProtocolKind kind,
+											 ProcessUtility_hook_type fn);
 
 /*
  * ListenProtocolServerPort -- open a listener socket for a registered

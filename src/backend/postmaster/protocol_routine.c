@@ -23,12 +23,26 @@
  * The built-in PG protocol is a kernel fallback and is also inserted into
  * the unified compatibility registry on first use, so initdb and other
  * standalone invocations do not depend on module loading.
+ *
+ * Registered routines are copied into kernel-owned storage.  Modules pass
+ * their own (typically const) instances; the kernel copy lets a single
+ * slot be updated after registration.  That is required when a slot's
+ * implementation lives in a library that loads later than the registrar:
+ * T-SQL's bbf_ProcessUtility lives in babelfishpg_tsql, which loads at TDS
+ * login, while the TDS ProtocolRoutine itself is registered by
+ * babelfishpg_tds at preload time.  Because every dispatch point (and
+ * Port.protocol_routine, resolved at pq_init()) reads the same kernel copy,
+ * a slot update is immediately visible with no re-registration and no
+ * pointer-identity break.
  * ----------------------------------------------------------------
  */
 static const ProtocolRoutine StandardProtocolRoutine = {
     .kind = COMPAT_PROTOCOL_POSTGRES,
     .name = "PostgreSQL",
 };
+
+static ProtocolRoutine protocol_slots[COMPAT_PROTOCOL_KIND_MAX];
+static bool protocol_slot_registered[COMPAT_PROTOCOL_KIND_MAX] = {false};
 
 /*
  * RegisterProtocolRoutine  –  register a protocol routine in the global
@@ -39,7 +53,28 @@ RegisterProtocolRoutine(const ProtocolRoutine *routine)
 {
 	Assert(routine != NULL);
 	Assert(CompatibilityProtocolKindIsValid(routine->kind));
-	RegisterCompatibilityProtocol(routine->kind, routine);
+
+	protocol_slots[routine->kind] = *routine;
+	protocol_slot_registered[routine->kind] = true;
+	RegisterCompatibilityProtocol(routine->kind, &protocol_slots[routine->kind]);
+}
+
+/*
+ * SetProtocolRoutineProcessUtility  –  update a registered protocol's
+ * process_utility slot after registration.  fn == NULL restores the value
+ * the slot had at registration time.  No-op when no ProtocolRoutine is
+ * registered for the kind (e.g. a dialect module loaded in a cluster where
+ * its protocol library is absent): there is nothing to wire, and the
+ * dialect is not reachable anyway.
+ */
+void
+SetProtocolRoutineProcessUtility(CompatibilityProtocolKind kind,
+								 ProcessUtility_hook_type fn)
+{
+	if (!CompatibilityProtocolKindIsValid(kind) || !protocol_slot_registered[kind])
+		return;
+
+	protocol_slots[kind].process_utility = fn;
 }
 
 /* ----------------------------------------------------------------
