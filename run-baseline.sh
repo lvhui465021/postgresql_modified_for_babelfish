@@ -29,6 +29,7 @@ PERL5LIB=/home/hlv/perl5/lib/perl5 meson test -C build \
 MYSQLEXT_DIR="${MYSQLEXT_DIR:-$K/../mysql_extensions}"
 BABELFISH_EXT_DIR="${BABELFISH_EXT_DIR:-$K/../babelfish_extensions}"
 SQLCMD_BIN_DIR="${SQLCMD_BIN_DIR:-$K/../sqlcmd-bin}"
+SQLCMD_OPTIONS="${SQLCMD_OPTIONS:-}"
 
 echo '=== 2. prove: MySQL TAP suites (against installed extensions) ==='
 cd "$MYSQLEXT_DIR/contrib/aux_mysql/t"
@@ -38,14 +39,15 @@ cd "$K/src/test/postmaster/t"
 PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v \
   004_mysql_protocol.pl 005_mysql_listener_stability.pl || failures=$((failures+1))
 
-echo '=== 3. prove: TDS TAP suites (needs sqlcmd->tsql shim on PATH) ==='
+echo '=== 3. prove: TDS TAP suites (requires sqlcmd on PATH) ==='
 if [ -d "$SQLCMD_BIN_DIR" ]; then
   export PATH="$SQLCMD_BIN_DIR:$PATH"
   cd "$BABELFISH_EXT_DIR/contrib/babelfishpg_tds/test"
-  PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v -I . \
+  BABELFISH_SQLCMD_OPTIONS="$SQLCMD_OPTIONS" \
+    PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v -I . \
     t/001_tdspasswd.pl t/003_bbfextnotloaded.pl || failures=$((failures+1))
 else
-  echo "WARNING: sqlcmd shim not found at $SQLCMD_BIN_DIR; skipping TDS TAP suite"
+  echo "WARNING: sqlcmd directory not found at $SQLCMD_BIN_DIR; skipping TDS TAP suite"
 fi
 
 echo
