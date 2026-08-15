@@ -27,6 +27,7 @@ PERL5LIB=/home/hlv/perl5/lib/perl5 meson test -C build \
 # (Phase 2 of the pluginization); the kernel keeps the postmaster TAP tests
 # that exercise the installed modules end to end.
 MYSQLEXT_DIR="${MYSQLEXT_DIR:-$K/../mysql_extensions}"
+BABELFISH_EXT_DIR="${BABELFISH_EXT_DIR:-$K/../babelfish_extensions}"
 
 echo '=== 2. prove: MySQL TAP suites (against installed extensions) ==='
 cd "$MYSQLEXT_DIR/contrib/aux_mysql/t"
@@ -39,7 +40,7 @@ PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v \
 echo '=== 3. prove: TDS TAP suites (needs sqlcmd->tsql shim on PATH) ==='
 if [ -d /home/hlv/openhalo-update/sqlcmd-bin ]; then
   export PATH=/home/hlv/openhalo-update/sqlcmd-bin:$PATH
-  cd "$K/../babelfish_extensions/contrib/babelfishpg_tds/test"
+  cd "$BABELFISH_EXT_DIR/contrib/babelfishpg_tds/test"
   PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v -I . \
     t/001_tdspasswd.pl t/003_bbfextnotloaded.pl || failures=$((failures+1))
 else
