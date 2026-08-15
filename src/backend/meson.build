@@ -211,13 +211,13 @@ test('mysql_build_graph_contract',
   find_program(join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_build_graph.sh')),
   args: [meson.project_source_root()])
 
-# Detect silent semantic drift between the MySQL fork files and their
-# upstream counterparts (a merge conflict would self-report; drift does not).
-# The forks currently contain functions / grammar rules that diverge from
-# upstream by more than the threshold; this is the known baseline to be
-# worked down, hence should_fail: the check reports drift (expected
-# failure) now, and an unexpected pass once a function falls back under the
-# threshold, prompting removal of the should_fail flag.
+# Detect silent semantic drift between the retained MySQL command fork and
+# its PostgreSQL counterpart (a merge conflict would self-report; drift does
+# not).  The fork currently contains functions that diverge from upstream by
+# more than the threshold; this is the known baseline to be worked down, hence
+# should_fail: the check reports drift (expected failure) now, and an
+# unexpected pass once a function falls back under the threshold prompts an
+# explicit review of the threshold and expected-failure setting.
 check_fork_drift = find_program(
   join_paths(meson.project_source_root(), 'src', 'tools', 'check_mysql_fork_drift.sh'))
 test('mysql_fork_drift_tablecmds',
@@ -225,10 +225,4 @@ test('mysql_fork_drift_tablecmds',
   args: ['50',
     join_paths(meson.project_source_root(), 'src', 'backend', 'commands', 'mysql', 'mys_tablecmds.c'),
     join_paths(meson.project_source_root(), 'src', 'backend', 'commands', 'tablecmds.c')],
-  should_fail: true)
-test('mysql_fork_drift_gram',
-  check_fork_drift,
-  args: ['30',
-    join_paths(meson.project_source_root(), 'src', 'backend', 'parser', 'mysql', 'mys_gram.y'),
-    join_paths(meson.project_source_root(), 'src', 'backend', 'parser', 'gram.y')],
   should_fail: true)

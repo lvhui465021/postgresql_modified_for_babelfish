@@ -1,6 +1,6 @@
 # MySQL 兼容层插件化边界声明(内核 ↔ 扩展)
 
-> 2026-08-14 定案,阶段 2 同日完成。本文件描述 MySQL 兼容层在内核与扩展之间的边界,以及 `mysql_extensions` 独立仓库(与 babelfish_extensions 对称)的实施背景。阶段 2 落地后,三个模块位于独立仓库 /home/hlv/openhalo-update/mysql_extensions(远程待建),本文件随该仓库维护为 README 边界声明。
+> 2026-08-14 定案,阶段 2 同日完成。本文件描述 MySQL 兼容层在内核与扩展之间的边界,以及 `mysql_extensions` 独立仓库(与 babelfish_extensions 对称)的实施背景。阶段 2 落地后,三个模块位于独立仓库 /home/hlv/openhalo-update/mysql_extensions,本文件随内核 docs/ 和独立仓库 README 维护。
 
 ## 1. 三层边界(终态)
 
@@ -29,11 +29,13 @@ MySQL 的若干语义织进执行器循环内部与命令实现内部,SPI 位于
 - mysql_parser/mysm 迁出内核 meson 构建,变为 contrib/ 下 PGXS 扩展(生成链:bison/flex/gen_keywordlist,PG_SRC 显式传入)
 - 内核 meson 摘除两个 shared_module 定义与扫描器/语法/关键字生成;src/include/meson.build 补 adapter 安装目录(openHalo 新增顶层头目录未注册)
 - aux_mysql 的 G3 gate 测试与 MySQL TAP 测试移出 meson(随模块迁出);postmaster 套件拆分(004/005 走 prove)
-- babelfish_extensions/build-all.sh 收编三 MySQL 模块(七扩展一键构建)
+- 当时由 babelfish_extensions/build-all.sh 收编三 MySQL 模块(七扩展一键构建);这是阶段 1 的历史状态
 - 测试联动切换:PG 核心套件(meson)+ MySQL/TDS TAP 套件(先 install 扩展、再 prove 对 inst/ 跑,见 run-baseline.sh)
 
-## 4. 阶段 2(规划):独立仓库 mysql_extensions
+## 4. 阶段 2(已完成):独立仓库 mysql_extensions
 
-- 与 babelfish_extensions 平级:git 切分(带历史)+ 自建 build-all.sh + 双仓联调
-- 本文件随仓库迁移,作为新仓库 README 的边界声明
+- 与 babelfish_extensions 平级:git 切分(带历史)+ 自建 build-all.sh + 双仓联调,三个模块已从内核 contrib/ 移除
+- babelfish_extensions/build-all.sh 只构建内核和四个 Babelfish 扩展;mysql_extensions/build-all.sh 单独构建 mysql_parser/mysm/aux_mysql
+- build-graph/vtable/fork-drift 契约检查留在内核,因为它们检查内核 Meson 图、vtable 消费者和内核 fork;跨仓导出符号检查由 MySQL 仓的 CI 在模块构建后调用
+- 本文件的同源边界说明同时维护在 mysql_extensions/README.md
 - 内核仓库仍保留:执行器/命令 fork + 接缝 + 头文件(如上表)——不是没拆干净,是架构边界

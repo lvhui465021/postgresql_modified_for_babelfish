@@ -120,7 +120,7 @@ check_named_members ADTExtMethod \
 check_reserved_members "$include/utils/adtextapi.h" \
 	"pre_numeric_in post_numeric_out pre_timetz_in post_timetz_out pre_timestamp_in post_timestamp_out allow_zero_length_char_typmod expr_typmod coalesce_typmod param_collation default_collation strpos_non_deterministic adjust_numeric_result detect_numeric_overflow identity_datatype sequence_datatype sortby_nulls unique_constraint_nulls_ordering"
 check_function_members ProtocolRoutine \
-	"$include/postmaster/protocol_routine.h" 22
+	"$include/postmaster/protocol_routine.h" 25
 
 # process_utility is a typedef-based hook rather than a (*member) spelling,
 # so account for it explicitly in the ProtocolRoutine contract.
@@ -133,4 +133,4 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-echo "MySQL compatibility vtable contract: ParserRoutine 5/5, ADTExtMethod 23/23 slots (6 live + 17 reserved), ProtocolRoutine 23/23 live"
+echo "MySQL compatibility vtable contract: ParserRoutine 5/5, ADTExtMethod 23/23 slots (6 live + 17 reserved), ProtocolRoutine 26/26 live"

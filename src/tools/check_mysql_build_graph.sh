@@ -1,11 +1,13 @@
 #!/bin/sh
 #
-# Verify the deliberate Meson-only build boundary for MySQL compatibility.
+# Verify the Phase 2 kernel/extension build boundary for MySQL compatibility.
 #
-# The MySQL sources are tree-internal, but their parser, type, protocol, and
-# DDL components are loadable modules or Meson backend sources.  An orphaned
-# parser Makefile/meson.build or a parent Makefile reference would create a
-# second, incomplete build graph and silently ship a different product.
+# mysql_parser, mysm, and aux_mysql are standalone PGXS modules in the sibling
+# mysql_extensions repository.  The kernel retains only the executor and
+# command forks, the session-state bridge, and the compatibility ABI.  A
+# lingering Meson edge to an in-tree module would create a second, divergent
+# product; losing an edge to a retained core fork would silently drop MySQL
+# semantics from postgres itself.
 #
 
 set -eu
@@ -19,15 +21,6 @@ fail()
 	status=1
 }
 
-for orphan in \
-	src/backend/parser/mysql/Makefile \
-	src/backend/parser/mysql/meson.build
-do
-	if test -e "$root/$orphan"; then
-		fail "orphan build rule exists: $orphan"
-	fi
-done
-
 require_text()
 {
 	file=$1
@@ -37,25 +30,29 @@ require_text()
 	fi
 }
 
-require_text src/backend/parser/meson.build "mysql_parser = shared_module('mysql_parser'"
-require_text src/backend/parser/meson.build "mys_kwlist_d = custom_target('mys_kwlist_d'"
 require_text src/backend/commands/meson.build "subdir('mysql')"
 require_text src/backend/adapter/meson.build "subdir('mysql')"
-require_text src/backend/utils/adt/meson.build "subdir('mysql')"
-require_text src/backend/utils/ddsm/meson.build "subdir('mysm')"
-require_text contrib/meson.build "subdir('aux_mysql')"
-require_text contrib/aux_mysql/meson.build "aux_mysql = shared_module('aux_mysql'"
+require_text src/backend/executor/meson.build "'mys_execMain.c'"
+require_text src/backend/executor/meson.build "'mys_nodeModifyTable.c'"
 
-# The autoconf/make graph must not pretend to recurse into a MySQL tree.
-for makefile in \
-	src/backend/Makefile \
-	src/backend/parser/Makefile \
-	src/backend/commands/Makefile \
-	src/backend/adapter/Makefile \
-	src/backend/utils/adt/Makefile
+# Loadable modules must not reappear in the kernel Meson graph after Phase 2.
+for edge in "subdir('mysql_parser')" "subdir('mysm')" "subdir('aux_mysql')"; do
+	if grep -Fq -- "$edge" "$root/contrib/meson.build"; then
+		fail "contrib/meson.build retains external-module edge: $edge"
+	fi
+done
+
+# A clean kernel checkout contains no build rules for the extracted modules.
+for orphan in \
+	contrib/mysql_parser/Makefile \
+	contrib/mysql_parser/meson.build \
+	contrib/mysm/Makefile \
+	contrib/mysm/meson.build \
+	contrib/aux_mysql/Makefile \
+	contrib/aux_mysql/meson.build
 do
-	if grep -Eq '(^|[[:space:]/])(mysql|mysm)(/|[[:space:]\\.$])' "$root/$makefile"; then
-		fail "$makefile contains an unsupported MySQL/mysm make edge"
+	if test -e "$root/$orphan"; then
+		fail "extracted module retains an in-kernel build rule: $orphan"
 	fi
 done
 
@@ -63,4 +60,4 @@ if test "$status" -ne 0; then
 	exit 1
 fi
 
-printf '%s\n' 'MySQL compatibility build graph: Meson-only, no orphan parser rules'
+printf '%s\n' 'MySQL compatibility build graph: Phase 2 boundary intact'

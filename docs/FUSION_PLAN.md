@@ -674,9 +674,11 @@ PERL5LIB=/home/hlv/perl5/lib/perl5 meson test -C build --suite setup --suite pos
 **不需要重新 initdb,除非 catversion 变化。** 常规流程:
 
 ```bash
-# 1) 一次构建装好内核 + 四扩展(零手动参数)
+# 1) 构建并安装内核 + 四个 Babelfish 扩展(零手动参数)
 cd /home/hlv/openhalo-update/babelfish_extensions && ./build-all.sh
-# 2) 重启集群加载新二进制(数据目录原样保留)
+# 2) 构建并安装独立的三个 MySQL 兼容模块
+cd /home/hlv/openhalo-update/mysql_extensions && ./build-all.sh
+# 3) 重启集群加载新二进制(数据目录原样保留)
 /home/hlv/openhalo-update/postgresql_modified_for_babelfish/inst/bin/pg_ctl -D /home/hlv/openhalo-update/testcluster restart
 ```
 

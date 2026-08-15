@@ -38,7 +38,8 @@
 ### 构建
 
 1. 内核 meson:meson setup build -Duuid=e2fs(uuid=e2fs 是持久化配置,新 checkout 需手动重配,不入 git);ninja -C build && ninja -C build install。
-2. 扩展:babelfish_extensions/build-all.sh 零手动步骤一键构建并安装四个扩展(common/money/tds/tsql),含全部前置检查。
+2. Babelfish 扩展:babelfish_extensions/build-all.sh 零手动步骤一键构建并安装四个扩展(common/money/tds/tsql),含全部前置检查。
+3. MySQL 模块:mysql_extensions/build-all.sh 单独构建并安装 mysql_parser/mysm/aux_mysql;它们不再位于内核 contrib/ 目录。
 
 ### 集群初始化
 

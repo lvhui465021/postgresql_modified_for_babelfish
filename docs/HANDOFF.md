@@ -59,7 +59,7 @@ openHalo × Babelfish 融合:同一 PG 18.3 postmaster 三协议并行(PG 5432 /
 
 ## 9. 下一步候选(未排期)
 
-1. check_mysql_* 开发工具(src/tools)迁入 mysql_extensions 仓库并更新路径引用
+1. 为 mysql_extensions 补 CI 入口,调用跨仓 ABI 检查(check_mysql_kernel_exports);build-graph/vtable/fork-drift 三项仍留内核,因为它们分别检查内核 Meson 图、vtable 消费者和内核 fork
 2. mysql_extensions 自身补 TAP 运行说明/CI 骨架(现由内核 run-baseline.sh 驱动)
 3. openHalo 上游跟踪:内核执行器/命令 fork 每 PG 版本 rebase(已有 check_mysql_fork_drift.sh 哨兵)
 4. A1 阶段二(bbfCustomProcessUtility_hook 槽位)等长期项,按文档决策不主动做
