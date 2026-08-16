@@ -16,11 +16,16 @@ PERLLIBDIR="$K/inst/lib/x86_64-linux-gnu/pgxs/src/test/perl"
 export PGBIN="$K/inst/bin"
 export PG_REGRESS="$K/build/src/test/regress/pg_regress"
 export PATH="$PGBIN:$PATH"
+# Keep the local PGXS TAP modules first; allow callers to prepend their own
+# local Perl libraries through the standard PERL5LIB variable instead of
+# hard-coding a machine-specific path.
+PERL5LIB="$PERLLIBDIR${PERL5LIB:+:$PERL5LIB}"
+export PERL5LIB
 
 failures=0
 
 echo '=== 1. meson: PG-core suites (setup/postmaster/regress/authentication) ==='
-PERL5LIB=/home/hlv/perl5/lib/perl5 meson test -C build \
+meson test -C build \
   --suite setup --suite postmaster --suite regress --suite authentication || failures=$((failures+1))
 
 # MySQL extension tests live in the standalone mysql_extensions repository
@@ -33,10 +38,10 @@ SQLCMD_OPTIONS="${SQLCMD_OPTIONS:-}"
 
 echo '=== 2. prove: MySQL TAP suites (against installed extensions) ==='
 cd "$MYSQLEXT_DIR/contrib/aux_mysql/t"
-PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v \
+prove -v \
   005_mysql_compat.pl 006_pg_dump_restore.pl 007_mysql_parallel.pl || failures=$((failures+1))
 cd "$K/src/test/postmaster/t"
-PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v \
+prove -v \
   004_mysql_protocol.pl 005_mysql_listener_stability.pl || failures=$((failures+1))
 
 echo '=== 3. prove: TDS TAP suites (requires sqlcmd on PATH) ==='
@@ -44,10 +49,11 @@ if [ -d "$SQLCMD_BIN_DIR" ]; then
   export PATH="$SQLCMD_BIN_DIR:$PATH"
   cd "$BABELFISH_EXT_DIR/contrib/babelfishpg_tds/test"
   BABELFISH_SQLCMD_OPTIONS="$SQLCMD_OPTIONS" \
-    PERL5LIB=/home/hlv/perl5/lib/perl5:$PERLLIBDIR prove -v -I . \
+    prove -v -I . \
     t/001_tdspasswd.pl t/003_bbfextnotloaded.pl || failures=$((failures+1))
 else
-  echo "WARNING: sqlcmd directory not found at $SQLCMD_BIN_DIR; skipping TDS TAP suite"
+  echo "ERROR: sqlcmd directory not found at $SQLCMD_BIN_DIR" >&2
+  failures=$((failures+1))
 fi
 
 echo
