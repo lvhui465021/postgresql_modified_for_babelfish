@@ -480,19 +480,19 @@ is(mysql_error_code($dollar_err), 1054,
    'dollar-quote probe is returned as ER_BAD_FIELD_ERROR');
 
 SKIP: {
-    my $mysql_cli = '/usr/bin/mysql';
-    skip 'official MySQL 8.4.10 CLI is not available', 2 unless -x $mysql_cli;
+    my $mysql_cli = $ENV{MYSQL_BIN} // '/usr/bin/mysql';
+    skip "configured MySQL CLI is not available: $mysql_cli", 2 unless -x $mysql_cli;
 
     local $ENV{MYSQL_PWD} = 'test123';
     open(my $cli, '-|', $mysql_cli,
          '--no-defaults', '--protocol=TCP', '--ssl-mode=DISABLED',
          '-h', '127.0.0.1', '-P', $mysql_port, '-u', 'mysql_user',
          '-N', '-e', 'SELECT 42')
-        or die "start MySQL 8.4.10 CLI: $!";
+        or die "start configured MySQL CLI: $!";
     my $cli_output = do { local $/; <$cli> };
     close($cli);
-    is($? >> 8, 0, 'official MySQL 8.4.10 CLI authenticates through AuthSwitch');
-    is($cli_output, "42\n", 'official MySQL 8.4.10 CLI can execute a query');
+    is($? >> 8, 0, 'configured MySQL CLI authenticates through AuthSwitch');
+    is($cli_output, "42\n", 'configured MySQL CLI can execute a query');
 }
 
 # -- MyCompatMode propagation into parallel workers ---------------------
