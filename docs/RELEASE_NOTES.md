@@ -1,10 +1,10 @@
 # 发布说明:openHalo × Babelfish 三协议并行融合(PG + MySQL + TDS)
 
-> 生成:2026-08-14。本文件随代码入仓(postgresql_modified_for_babelfish/docs/),配套文档见文末索引。
+> 更新:2026-08-17。本文件随代码入仓(postgresql_modified_for_babelfish/docs/)。当前产品 manifest、端口和验收结果以超级仓 `openhalo-babelfish/docs/` 为准。
 
 ## 1. 定位与范围
 
-在同一个 PostgreSQL 18.3 实例(postmaster)上并行监听三种线协议:PostgreSQL(5432)、MySQL(13306 或配置端口)、TDS/SQL Server(1433)。每种协议的连接在解析、类型、DDL、错误封帧各层拿到各自方言的语义。
+在同一个 PostgreSQL 18.3 实例(postmaster)上并行监听三种线协议:PostgreSQL(5432)、MySQL(3306 或配置端口)、TDS/SQL Server(1433)。13306 是 3306 被占用时的开发覆盖。每种协议的连接在解析、类型、DDL、错误封帧各层拿到各自方言的语义。
 
 **范围口径(用户指定):兼容功能只保持与 openHalo / Babelfish 上游持平即可,不实现上游没有的特性。**
 
@@ -13,12 +13,12 @@
 | 组件 | 仓库 / 分支 | 基线 |
 |---|---|---|
 | 内核 | postgresql_modified_for_babelfish @ openhalo-fusion | PG 18.3(Babelfish BABEL_6_0_STABLE__PG_18_3)+ openHalo MySQL 能力,catversion 202506292 |
-| TDS 扩展 | babelfish_extensions @ BABEL_6_0_STABLE | Babelfish 6.0.0(内部版本 18.3.0.0) |
+| TDS 扩展 | babelfish_extensions @ openhalo-fusion | Babelfish 6.0.0(内部版本 18.3.0.0) |
 | MySQL 侧 | 内核内置(parser/adtext/protocol 注册表)+ contrib/aux_mysql 扩展 | 与 openHalo @ cbd6642fb03 对齐(审计见 FUSION_PLAN) |
 
 ## 3. 已验证能力
 
-- **三协议并行**:同一存活 postmaster 上 5432/13306/1433 交替验证;同一表达式 5/2 三语义:PG=2、MySQL=2.5000、T-SQL DECIMAL 除法=2.5000000000000000。
+- **三协议并行**:同一存活 postmaster 上 5432/3306/1433 交替验证;同一表达式 5/2 三语义:PG=2、MySQL=2.5000、T-SQL DECIMAL 除法=2.5000000000000000。
 - **MySQL**:真实 mysql CLI 端到端(DDL/DML/事务/函数/预编译协议/排序规则语义);openHalo 自有测试 SQL 集 12 文件实跑,13 处差异全部归类(无功能缺失,多数优于上游,详见 FUSION_PLAN 的 openHalo 整合审计);SHOW DATABASES/SHOW STATUS/SHOW WARNINGS 等管理命令正常。
 - **TDS**:真实 FreeTDS tsql 端到端(@@VERSION/IDENTITY/NVARCHAR/存储过程/游标/TRY-CATCH/SEQUENCE AS BIGINT/DECIMAL 语义/ORDER BY NULLS/CHARINDEX/REPLACE);TDS 官方 TAP 套件 001/003 通过(见 6)。
 - **PG**:内核 regress 232/232 子测试全过,原生行为不受影响。
@@ -32,7 +32,7 @@
 - JRE(ANTLR4 代码生成器,仓库自带 jar)与 cmake
 - ANTLR4 C++ runtime 精确 4.13.2(apt 的 4.10 不兼容),安装到 /usr/local
 - libxml2 开发包、libuuid(uuid-ossp 依赖)
-- Perl 模块 IPC::Run(测试用,本机装于 ~/perl5,跑测试需 PERL5LIB=/home/hlv/perl5/lib/perl5)
+- Perl 模块 IPC::Run(测试用);集成基线脚本负责处理所需 Perl 库路径，不依赖固定的用户目录。
 - FreeTDS tsql(或任意 TDS 客户端)用于 TDS 端到端验证
 
 ### 构建
@@ -44,7 +44,7 @@
 ### 集群初始化
 
 - catversion 已 bump 至 202506292:任何早于 P3-2(rolpasswordext)的数据目录无法被新二进制启动,需重新 initdb(保护性行为)。
-- 三协议集群配置参考 FUSION_PLAN 第 8 节:shared_preload_libraries 为 mysql_parser, mysm, aux_mysql, babelfishpg_tds;端口 PG 5432 / mysql_port 13306 / babelfishpg_tds.port 1433;HBA:MySQL 协议只认 md5 方法,TDS 不支持 scram。
+- 三协议集群配置参考 FUSION_PLAN 第 8 节:shared_preload_libraries 为 mysql_parser, mysm, aux_mysql, babelfishpg_tds;产品默认端口 PG 5432 / mysql_port 3306 / babelfishpg_tds.port 1433;HBA:MySQL 协议只认 md5 方法,TDS 不支持 scram。
 - MySQL 协议用户密码须以 mysql_native_password 格式存储:SET password_encryption='mysql_native_password'; ALTER USER ... PASSWORD '...'。
 - 需 CREATE EXTENSION aux_mysql(或 initdb -m mysql);TDS 侧在目标库 CREATE EXTENSION babelfishpg_tsql CASCADE 后 CALL sys.initialize_babelfish(角色名)。
 
@@ -62,9 +62,9 @@
 
 ## 6. 测试基线
 
-- 内核五套件 meson test(setup/postmaster/aux_mysql/regress/authentication):18 OK / 0 Fail(2 环境性 skip)。
+- `v18.3-fusion.2` 集成基线:PG-core Meson 12 OK / 2 预期 skip;MySQL 31 个独立 TAP + 485 个内核 TAP;TDS 001/003 共 8 个 TAP。完整命令、环境和干净 clone 证据见超级仓 `docs/VALIDATION.md`。
 - openHalo MySQL 兼容测试 SQL 集:12 文件实跑,差异全部归类(详见 FUSION_PLAN 审计节)。
-- TDS 官方 TAP 套件:001_tdspasswd、003_bbfextnotloaded 通过(sqlcmd 经翻译 shim 接 FreeTDS tsql);002 需 Kerberos 环境、004 需旧版本安装(oldinstall/installdir16),本环境跳过。
+- TDS 官方 TAP 套件:001_tdspasswd、003_bbfextnotloaded 使用真实 Microsoft SQLCMD 18 通过；002 需 Kerberos 环境、004 需旧版本安装(oldinstall/installdir16)，因此不属于当前基线。非 TLS 夹具用 `SQLCMD_OPTIONS=-No`，生产必须验证 TLS 和证书。
 - 三协议手工端到端:psql / mysql CLI / tsql 交替验证,见 FUSION_PLAN 第 0、5.5、5.7 节。
 
 ## 7. 明确非目标(记录在案,不阻塞交付)
